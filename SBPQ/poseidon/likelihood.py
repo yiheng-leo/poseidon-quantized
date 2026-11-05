@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import torch
+from torch.utils.checkpoint import checkpoint
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -199,6 +200,7 @@ def compute_network_mc_likelihood_single_batch(
     num_mc_samples: int = 10,
     eta: float = 1e-4,
     device: str | torch.device = "cuda",
+    memory_efficient: bool = True,
 ) -> torch.Tensor:
     """
     Compute the network-wise Monte Carlo negative log likelihood for one
@@ -290,13 +292,14 @@ def compute_network_mc_likelihood_single_batch(
         batch_index
     ].to(device)
 
-    monte_carlo_scores = []
+    layer_names = tuple(step_sizes)
+    values = tuple(step_sizes[name].to(device) for name in layer_names)
 
-    for _ in range(num_mc_samples):
+    def sample_score(*sample_steps):
         noisy_output = run_poseidon_with_weight_noise(
             model=model,
             batch=batch,
-            step_sizes=step_sizes,
+            step_sizes=dict(zip(layer_names, sample_steps)),
             device=device,
         )
 
@@ -317,14 +320,23 @@ def compute_network_mc_likelihood_single_batch(
             dim=reduce_dims
         )
 
-        sample_score = (
+        score = (
             -squared_error
             / (2.0 * float(eta))
         )
 
-        monte_carlo_scores.append(
-            sample_score
-        )
+        return score
+
+    # Save small step tensors and RNG states, not M full sets of noisy weights
+    # and activations. Backward replays the original draws one sample at a time.
+    monte_carlo_scores = []
+    for _ in range(num_mc_samples):
+        if memory_efficient and torch.is_grad_enabled():
+            score = checkpoint(sample_score, *values, use_reentrant=False,
+                               preserve_rng_state=True)
+        else:
+            score = sample_score(*values)
+        monte_carlo_scores.append(score)
 
     scores = torch.stack(
         monte_carlo_scores,

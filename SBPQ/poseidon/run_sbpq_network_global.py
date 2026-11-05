@@ -622,6 +622,37 @@ def main() -> None:
 
     learned_steps = trainer.get_step_sizes()
 
+    run_dir = cfg.poseidon_artifact_dir / "runs" / run_name
+    run_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    trainer.save(
+        save_path=run_dir / "sbpq_trainer_state.pt",
+        metadata={
+            "model_path": cfg.model_path,
+            "dataset_name": cfg.dataset_name,
+            "num_candidate_layers": len(candidate_layers),
+            "num_frozen_batches": len(frozen_batches),
+            "num_frozen_validation_batches": len(frozen_val_batches),
+            "beta_parameter_path": str(beta_parameter_path),
+            "sensitivity_path": str(sensitivity_path),
+            "run_name": run_name,
+            "sensitivity_tag": sensitivity_tag,
+            "beta_tag": beta_tag,
+        },
+    )
+
+    with (run_dir / "history.json").open("w") as handle:
+        json.dump(
+            history,
+            handle,
+            indent=2,
+        )
+
+    print("[INFO] Final step sizes and history saved before validation.", flush=True)
+
     fp_metrics = evaluate_poseidon_with_weight_steps(
         model=model,
         dataloader=frozen_val_batches,
@@ -654,28 +685,6 @@ def main() -> None:
                 device=device,
             )
         )
-
-    run_dir = cfg.poseidon_artifact_dir / "runs" / run_name
-    run_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    trainer.save(
-        save_path=run_dir / "sbpq_trainer_state.pt",
-        metadata={
-            "model_path": cfg.model_path,
-            "dataset_name": cfg.dataset_name,
-            "num_candidate_layers": len(candidate_layers),
-            "num_frozen_batches": len(frozen_batches),
-            "num_frozen_validation_batches": len(frozen_val_batches),
-            "beta_parameter_path": str(beta_parameter_path),
-            "sensitivity_path": str(sensitivity_path),
-            "run_name": run_name,
-            "sensitivity_tag": sensitivity_tag,
-            "beta_tag": beta_tag,
-        },
-    )
 
     metrics = {
         "artifact_paths": {
@@ -728,13 +737,6 @@ def main() -> None:
             raw_sensitivity,
         ),
     }
-
-    with (run_dir / "history.json").open("w") as handle:
-        json.dump(
-            history,
-            handle,
-            indent=2,
-        )
 
     with (run_dir / "metrics.json").open("w") as handle:
         json.dump(

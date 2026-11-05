@@ -103,6 +103,8 @@ def freeze_model_parameters(
     """
     for parameter in model.parameters():
         parameter.requires_grad_(False)
+        # Sensitivity estimation populated FP gradients before this trainer.
+        parameter.grad = None
 
     model.eval()
 
@@ -392,6 +394,7 @@ class SBPQTrainer:
             f"[INFO] SBPQ trainer initialized with "
             f"{len(filtered_weight_ranges)} quantized layers."
         )
+        print("[INFO] MC backward: checkpoint replay with original RNG states.")
 
     def get_step_sizes(
         self,

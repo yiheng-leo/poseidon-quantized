@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -118,12 +119,15 @@ def evaluate_poseidon_with_weight_steps(
     weight_step_sizes: Mapping[str, torch.Tensor],
     layer_names,
     device: str | torch.device,
+    forward_batch_size: int | None = 8,
 ) -> dict[str, float]:
     """
     Evaluate Poseidon with optional weight-only fake quantization.
     """
     device = torch.device(device)
     model = model.to(device).eval()
+    if forward_batch_size is not None and forward_batch_size < 1:
+        raise ValueError("forward_batch_size must be positive.")
     name_to_module = dict(model.named_modules())
 
     handles = []
@@ -156,29 +160,24 @@ def evaluate_poseidon_with_weight_steps(
     try:
         with torch.no_grad():
             for batch in loader:
-                (
-                    pixel_values,
-                    time,
-                    pixel_mask,
-                    labels,
-                ) = move_poseidon_batch_to_device(
-                    batch=batch,
-                    device=device,
-                )
-
+                labels = batch.get("labels")
                 if labels is None:
                     continue
-
-                outputs = model(
-                    pixel_values=pixel_values,
-                    time=time,
-                    pixel_mask=pixel_mask,
-                    labels=labels,
-                )
-
-                prediction = outputs.output
-
-                prediction_np = prediction.detach().cpu().numpy()
+                size = len(batch["pixel_values"])
+                chunk_size = forward_batch_size or size
+                predictions = []
+                for start in range(0, size, chunk_size):
+                    chunk = {key: value[start:start + chunk_size]
+                             if torch.is_tensor(value) and value.ndim and value.shape[0] == size
+                             else value for key, value in batch.items()}
+                    pixel_values, time, pixel_mask, chunk_labels = move_poseidon_batch_to_device(chunk, device)
+                    outputs = model(pixel_values=pixel_values, time=time,
+                                    pixel_mask=pixel_mask, labels=chunk_labels)
+                    predictions.append(outputs.output.detach().cpu().numpy())
+                    del outputs
+                # Preserve the original loader-batch averaging, even for a
+                # final chunk smaller than forward_batch_size.
+                prediction_np = np.concatenate(predictions, axis=0)
                 labels_np = labels.detach().cpu().numpy()
 
                 l1_values.append(

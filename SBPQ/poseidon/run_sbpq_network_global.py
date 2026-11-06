@@ -14,16 +14,21 @@ Workflow:
 from __future__ import annotations
 
 from contextlib import contextmanager
+import argparse
 import json
+import random
+import sys
 from pathlib import Path
 import time
 from typing import Any
 
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
 from SBPQ.trainer import SBPQTrainer
+from SBPQ.resume import resolve_checkpoint
 from SBPQ.poseidon.config import SBPQConfig
 from SBPQ.poseidon.poseidon_utils import (
     build_poseidon_loaders,
@@ -322,10 +327,29 @@ def tensor_dict_to_float_dict(values: dict) -> dict:
     }
 
 
-def main() -> None:
+def main(argv=None) -> None:
     cfg = SBPQConfig()
+    parser = argparse.ArgumentParser(description="Poseidon SBPQ training with periodic checkpoints.")
+    parser.add_argument("--resume", help="Checkpoint file or run directory; also SBPQ_RESUME.")
+    parser.add_argument("--save_every", "--save-every", type=int, help="Checkpoint interval in optimizer steps; also SBPQ_SAVE_EVERY.")
+    parser.add_argument("--total_steps", "--total-steps", type=int, help="Target cumulative optimizer steps, including restored steps.")
+    args = parser.parse_args([] if argv is None else argv)
+    if args.resume is not None:
+        cfg.resume = args.resume
+    if args.save_every is not None:
+        cfg.save_every = args.save_every
+    if args.total_steps is not None:
+        cfg.num_optimization_steps = args.total_steps
+    if cfg.save_every < 1:
+        parser.error("--save_every must be positive")
+    resume_path = resolve_checkpoint(cfg.resume) if cfg.resume else None
+    if resume_path and cfg.num_optimization_steps is None:
+        saved = torch.load(resume_path, map_location="cpu", weights_only=False)
+        cfg.num_optimization_steps = saved.get("metadata", {}).get("target_total_steps")
     cfg.create_directories()
 
+    random.seed(cfg.random_seed)
+    np.random.seed(cfg.random_seed)
     torch.manual_seed(cfg.random_seed)
 
     print("\n========== SBPQ POSEIDON CONFIG ==========")
@@ -615,33 +639,54 @@ def main() -> None:
             * cfg.updates_per_batch
         )
 
-    history = trainer.optimize(
-        number_of_steps=number_of_steps,
-        print_every=cfg.log_every,
-    )
-
-    learned_steps = trainer.get_step_sizes()
-
-    run_dir = cfg.poseidon_artifact_dir / "runs" / run_name
+    run_dir = resume_path.parent if resume_path else cfg.poseidon_artifact_dir / "runs" / run_name
     run_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
+    if not resume_path and any((run_dir / name).exists() for name in
+                               ("sbpq_checkpoint.pt", "sbpq_trainer_state.pt")):
+        raise FileExistsError(f"Training state already exists in {run_dir}; use --resume or a new SBPQ_RUN_GROUP.")
+    print(f"[INFO] Training checkpoint directory: {run_dir}", flush=True)
 
+    metadata = {
+        "target_total_steps": number_of_steps,
+        "model_path": cfg.model_path,
+        "dataset_name": cfg.dataset_name,
+        "num_candidate_layers": len(candidate_layers),
+        "num_frozen_batches": len(frozen_batches),
+        "num_frozen_validation_batches": len(frozen_val_batches),
+        "beta_parameter_path": str(beta_parameter_path),
+        "sensitivity_path": str(sensitivity_path),
+        "run_name": run_dir.name,
+        "sensitivity_tag": sensitivity_tag,
+        "beta_tag": beta_tag,
+        "resume_config": {
+            key: getattr(cfg, key) for key in (
+                "model_path", "data_path", "dataset_name", "random_seed",
+                "calib_batch_size", "calib_steps", "percentile_prob", "range_method",
+                "reference_bits", "delta_bits", "beta_kappa", "beta_prior_scale",
+                "beta_epsilon", "beta_relative_epsilon", "task_loss_weight", "sobolev_loss_weight",
+                "sensitivity_batches", "max_blocks", "sobolev_order", "sobolev_order_weights",
+                "sobolev_norm", "sobolev_transpose", "updates_per_batch",
+            )
+        },
+    }
+    if resume_path:
+        trainer.load(resume_path, expected_metadata={
+            key: metadata[key] for key in ("model_path", "dataset_name", "resume_config")})
+
+    history = trainer.optimize(
+        number_of_steps=number_of_steps,
+        print_every=cfg.log_every,
+        checkpoint_path=run_dir / "sbpq_checkpoint.pt",
+        save_every=cfg.save_every,
+        checkpoint_metadata=metadata,
+    )
+    learned_steps = trainer.get_step_sizes()
     trainer.save(
         save_path=run_dir / "sbpq_trainer_state.pt",
-        metadata={
-            "model_path": cfg.model_path,
-            "dataset_name": cfg.dataset_name,
-            "num_candidate_layers": len(candidate_layers),
-            "num_frozen_batches": len(frozen_batches),
-            "num_frozen_validation_batches": len(frozen_val_batches),
-            "beta_parameter_path": str(beta_parameter_path),
-            "sensitivity_path": str(sensitivity_path),
-            "run_name": run_name,
-            "sensitivity_tag": sensitivity_tag,
-            "beta_tag": beta_tag,
-        },
+        metadata=metadata,
     )
 
     with (run_dir / "history.json").open("w") as handle:
@@ -751,4 +796,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

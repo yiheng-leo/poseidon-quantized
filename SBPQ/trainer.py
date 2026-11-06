@@ -24,12 +24,14 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+import warnings
 
 import torch
 import torch.nn as nn
 
 from SBPQ.beta_prior import BlockwiseBetaPrior
 from SBPQ.step_sizes import LearnableStepSizes
+from SBPQ.resume import atomic_save, fingerprint, rng_state, restore_rng
 from SBPQ.poseidon.likelihood import PoseidonNetworkLikelihood
 
 
@@ -389,6 +391,21 @@ class SBPQTrainer:
         )
 
         self.history: list[dict[str, float]] = []
+        self.training_signature = {
+            "calibration": fingerprint(self.frozen_batches),
+            "clean_outputs": fingerprint(self.clean_network_outputs),
+            "ranges": fingerprint(self.get_quantization_ranges()),
+            "beta": fingerprint(self.beta_prior.state_dict()),
+            "layer_to_block": dict(self.layer_to_block),
+            "layer_order": list(self.get_step_sizes()),
+            "initial_bits": self.initial_bits, "minimum_bits": self.minimum_bits,
+            "maximum_bits": self.maximum_bits, "learning_rate": self.learning_rate,
+            "likelihood_scale": self.likelihood_scale, "prior_scale": self.prior_scale,
+            "num_mc_samples": num_mc_samples, "eta": eta,
+            "weight_decay": weight_decay, "gradient_clip_norm": gradient_clip_norm,
+            "beta_boundary_epsilon": beta_boundary_epsilon, "beta_reduction": beta_reduction,
+            "channel_weights": fingerprint(self.channel_weights),
+        }
 
         print(
             f"[INFO] SBPQ trainer initialized with "
@@ -543,6 +560,9 @@ class SBPQTrainer:
         self,
         number_of_steps: int,
         print_every: int = 1,
+        checkpoint_path: str | Path | None = None,
+        save_every: int = 100,
+        checkpoint_metadata: dict | None = None,
     ) -> list[dict[str, float]]:
         """
         Run SBPQ step-size optimization.
@@ -553,6 +573,10 @@ class SBPQTrainer:
             step 1 -> batch 1
             ...
             final batch -> return to batch 0
+
+        number_of_steps is the cumulative target, including restored history.
+        Periodic checkpoints contain only completed updates; an interrupted
+        update is replayed from the last successful atomic checkpoint.
         """
         if number_of_steps <= 0:
             raise ValueError(
@@ -566,7 +590,16 @@ class SBPQTrainer:
 
         print("\n========== SBPQ OPTIMIZATION ==========")
 
-        for step_index in range(number_of_steps):
+        start_step = len(self.history)
+        if number_of_steps < start_step:
+            raise ValueError(f"Target total steps {number_of_steps} is below completed steps {start_step}.")
+        if save_every < 1:
+            raise ValueError("save_every must be positive.")
+        print(f"[INFO] Completed steps={start_step}; target total steps={number_of_steps}.")
+        if checkpoint_path is not None:
+            self.save(checkpoint_path, checkpoint_metadata)
+
+        for step_index in range(start_step, number_of_steps):
             batch_index = (
                 step_index % len(self.frozen_batches)
             )
@@ -574,6 +607,10 @@ class SBPQTrainer:
             result = self.train_step(
                 batch_index=batch_index,
             )
+            if checkpoint_path is not None and (
+                (step_index + 1) % save_every == 0 or step_index + 1 == number_of_steps
+            ):
+                self.save(checkpoint_path, checkpoint_metadata)
 
             if (
                 (step_index + 1) % print_every == 0
@@ -708,6 +745,10 @@ class SBPQTrainer:
         Build a serializable SBPQ optimization state.
         """
         return {
+            "resume_version": 1,
+            "completed_steps": len(self.history),
+            "training_signature": self.training_signature,
+            "rng_state": rng_state(self.device),
             "step_size_state_dict": (
                 self.step_size_module.state_dict()
             ),
@@ -771,19 +812,18 @@ class SBPQTrainer:
             in self.get_effective_bitwidths().items()
         }
 
-        torch.save(
-            state,
-            save_path,
-        )
+        atomic_save(state, save_path)
 
         print(
             f"[INFO] Saved SBPQ trainer state to: {save_path}"
+            f" (completed_steps={len(self.history)})"
         )
 
     def load(
         self,
         checkpoint_path: str | Path,
         load_optimizer: bool = True,
+        expected_metadata: dict | None = None,
     ) -> None:
         """
         Restore step sizes and optionally the optimizer state.
@@ -800,8 +840,30 @@ class SBPQTrainer:
 
         checkpoint = torch.load(
             checkpoint_path,
-            map_location=self.device,
+            map_location="cpu",
+            weights_only=False,
         )
+
+        signature = checkpoint.get("training_signature")
+        if load_optimizer and signature is not None:
+            differences = [key for key in self.training_signature
+                           if signature.get(key) != self.training_signature[key]]
+            if differences:
+                raise ValueError(f"Resume training inputs/settings differ: {differences}")
+        elif load_optimizer:
+            for key in ("initial_bits", "minimum_bits", "maximum_bits", "learning_rate",
+                        "likelihood_scale", "prior_scale", "layer_to_block"):
+                if key in checkpoint and checkpoint[key] != getattr(self, key):
+                    raise ValueError(f"Legacy resume setting differs: {key}")
+        saved_metadata = checkpoint.get("metadata", {})
+        for key, value in (expected_metadata or {}).items():
+            if key in saved_metadata and saved_metadata[key] != value:
+                raise ValueError(f"Resume metadata differs: {key}")
+        completed = checkpoint.get("completed_steps", len(checkpoint.get("history", [])))
+        if completed != len(checkpoint.get("history", [])):
+            raise ValueError("Checkpoint completed_steps does not match history length.")
+        if checkpoint.get("rng_state", {}).get("device_type", self.device.type) != self.device.type:
+            raise ValueError("Exact resume requires the same device type as the checkpoint.")
 
         if "step_size_state_dict" not in checkpoint:
             raise KeyError(
@@ -830,6 +892,12 @@ class SBPQTrainer:
 
         # Ensure the loaded step sizes satisfy the configured bounds.
         self.step_size_module.clamp_()
+
+        if load_optimizer and "rng_state" in checkpoint and signature is not None:
+            restore_rng(checkpoint["rng_state"], self.device)
+        elif load_optimizer:
+            warnings.warn("Legacy checkpoint: restoring steps/optimizer/history, but original RNG "
+                          "and calibration identity were not saved; continuation is not exact.", RuntimeWarning)
 
         print(
             f"[INFO] Loaded SBPQ checkpoint from: "

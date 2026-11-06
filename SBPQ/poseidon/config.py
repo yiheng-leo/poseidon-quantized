@@ -54,6 +54,8 @@ class SBPQConfig:
     device: str = "cuda"
     random_seed: int = 42
     run_group: str = ""
+    resume: str | None = None
+    save_every: int = 100
 
     # ==================================================
     # Calibration and validation
@@ -130,6 +132,10 @@ class SBPQConfig:
     sobolev_transpose: bool = False
 
     def __post_init__(self):
+        self.resume = os.environ.get("SBPQ_RESUME", self.resume) or None
+        self.save_every = int(os.environ.get("SBPQ_SAVE_EVERY", self.save_every))
+        if self.save_every < 1:
+            raise ValueError("SBPQ_SAVE_EVERY must be positive.")
         # Allow cluster commands to override important paths.
         self.model_path = os.environ.get(
             "SBPQ_MODEL_PATH",

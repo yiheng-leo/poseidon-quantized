@@ -6,6 +6,18 @@ Run the complete experiment from the repository root with:
 python -u run_sbpq_poseidon.py
 ```
 
+`SBPQ_SOBOLEV_ORDER_WEIGHTS=1` is a scalar and broadcasts to every derivative
+order (for order 2: `[1, 1, 1]`). Explicit comma-separated values must have
+exactly `order + 1` entries. Invalid lengths fail during configuration, before
+model loading or sensitivity computation. The `SBPQ_SOB_WEIGHTS` alias follows
+the same rules. Scalar `1` retains the historical `sw1` cache/run tag.
+
+The runner prints the selected Linear count before preparing caches. A cached
+range file may contain a superset (e.g. 792 entries) while only 524 layers are
+selected; it filters to the current selection without modifying the cache and
+rejects missing selected entries. The cache-entry count is not the number of
+layers being optimized.
+
 The MC likelihood uses non-reentrant PyTorch checkpointing by default. Noisy
 weights and activations are recomputed during backward with the original RNG
 states. The original **sum** squared-error energy, log-mean-exp, MC count, eta,

@@ -327,6 +327,18 @@ def tensor_dict_to_float_dict(values: dict) -> dict:
     }
 
 
+def select_candidate_ranges(ranges, candidate_layers):
+    """A shared range cache can contain more layers than the current selection."""
+    missing = [name for name in candidate_layers if name not in ranges]
+    if missing:
+        raise ValueError(f"Range cache is missing {len(missing)} selected layers: {missing[:5]}")
+    selected = set(candidate_layers)
+    filtered = {name: value for name, value in ranges.items() if name in selected}
+    print(f"[INFO] Using ranges for {len(filtered)} selected Linear layers "
+          f"(cache entries={len(ranges)}).", flush=True)
+    return filtered
+
+
 def main(argv=None) -> None:
     cfg = SBPQConfig()
     parser = argparse.ArgumentParser(description="Poseidon SBPQ training with periodic checkpoints.")
@@ -434,6 +446,7 @@ def main(argv=None) -> None:
         quant_layer_path=cfg.quant_layer_path,
         fallback_layers=fallback_layers,
     )
+    print(f"[INFO] Selected candidate Linear layers: {len(candidate_layers)}", flush=True)
 
     layer_to_block = {
         layer_name: layer_to_block_all[layer_name]
@@ -519,6 +532,8 @@ def main(argv=None) -> None:
                 "layer_names": candidate_layers,
             },
         )
+
+    ranges = select_candidate_ranges(ranges, candidate_layers)
 
     sensitivity_path = (
         cfg.poseidon_artifact_dir

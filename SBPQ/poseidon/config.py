@@ -3,9 +3,9 @@ from pathlib import Path
 import os
 
 
-def _parse_float_tuple(value: str) -> tuple[float, ...]:
+def _parse_order_weights(value: str) -> float | tuple[float, ...]:
     """
-    Parse comma-separated floats from an environment variable.
+    Parse a scalar broadcast weight or comma-separated per-order weights.
     """
     values = [
         item.strip()
@@ -18,7 +18,8 @@ def _parse_float_tuple(value: str) -> tuple[float, ...]:
             "Expected at least one comma-separated float."
         )
 
-    return tuple(float(item) for item in values)
+    parsed = tuple(float(item) for item in values)
+    return parsed[0] if len(parsed) == 1 else parsed
 
 
 @dataclass
@@ -290,11 +291,11 @@ class SBPQConfig:
             self.sobolev_norm,
         )
         if "SBPQ_SOBOLEV_ORDER_WEIGHTS" in os.environ:
-            self.sobolev_order_weights = _parse_float_tuple(
+            self.sobolev_order_weights = _parse_order_weights(
                 os.environ["SBPQ_SOBOLEV_ORDER_WEIGHTS"]
             )
         elif "SBPQ_SOB_WEIGHTS" in os.environ:
-            self.sobolev_order_weights = _parse_float_tuple(
+            self.sobolev_order_weights = _parse_order_weights(
                 os.environ["SBPQ_SOB_WEIGHTS"]
             )
         elif (
@@ -302,6 +303,11 @@ class SBPQConfig:
             and len(self.sobolev_order_weights) != self.sobolev_order + 1
         ):
             self.sobolev_order_weights = 1.0
+
+        if (not isinstance(self.sobolev_order_weights, (int, float))
+                and len(self.sobolev_order_weights) != self.sobolev_order + 1):
+            raise ValueError(f"SBPQ_SOBOLEV_ORDER_WEIGHTS must be a scalar or contain exactly "
+                             f"{self.sobolev_order + 1} values for order {self.sobolev_order}.")
 
         if self.minimum_bits >= self.maximum_bits:
             raise ValueError(

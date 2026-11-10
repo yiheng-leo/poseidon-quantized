@@ -29,6 +29,8 @@ import warnings
 import torch
 import torch.nn as nn
 
+from SBPQ.storage import DiskSequence
+
 from SBPQ.beta_prior import BlockwiseBetaPrior
 from SBPQ.step_sizes import LearnableStepSizes
 from SBPQ.resume import atomic_save, fingerprint, rng_state, restore_rng
@@ -252,9 +254,7 @@ class SBPQTrainer:
                 "gradient_clip_norm must be positive or None."
             )
 
-        self.device = torch.device(
-            device if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device(device)
 
         self.model = model.to(self.device)
 
@@ -262,14 +262,13 @@ class SBPQTrainer:
             self.model
         )
 
-        self.frozen_batches = list(
-            frozen_batches
-        )
+        self.frozen_batches = (frozen_batches if isinstance(frozen_batches, DiskSequence)
+                               else list(frozen_batches))
 
-        self.clean_network_outputs = [
-            output.detach().cpu()
-            for output in clean_network_outputs
-        ]
+        self.clean_network_outputs = (
+            clean_network_outputs if isinstance(clean_network_outputs, DiskSequence)
+            else [output.detach().cpu() for output in clean_network_outputs]
+        )
 
         self.minimum_bits = float(
             minimum_bits

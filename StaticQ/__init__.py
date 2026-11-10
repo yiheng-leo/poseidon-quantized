@@ -1,0 +1,1 @@
+"""Maintained Poseidon static adaptation."""

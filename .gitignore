@@ -118,3 +118,10 @@ aurora_artifacts/
 SAPQ/debug_first_epoch_grads_out/
 SBPQ/artifacts/
 SBPQ/__pycache__/
+
+# Unified ritchie experiment outputs
+quantization_artifacts/
+quantization_evaluation/
+sbpq_cache/
+sbpq_outputs/
+.pytest_cache/

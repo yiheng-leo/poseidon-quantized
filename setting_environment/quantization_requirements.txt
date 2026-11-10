@@ -1,0 +1,10 @@
+# Python >= 3.10; use the appropriate PyTorch build for your GPU.
+torch>=2.4
+transformers==4.35.2
+accelerate==0.31.0
+numpy
+scipy
+h5py
+matplotlib
+tqdm
+pytest

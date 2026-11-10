@@ -1,0 +1,10 @@
+{
+  "traj_num": 64,
+  "random_calibration": "n",
+  "calibration_seed": 42,
+  "final_time": 20,
+  "time_back": 0,
+  "method": "repq",
+  "weight_bits": 8,
+  "activation_bits": 8
+}

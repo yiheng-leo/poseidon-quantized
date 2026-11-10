@@ -1,6 +1,7 @@
 """Atomic training checkpoints and deterministic resume bookkeeping."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 import hashlib
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ def fingerprint(value):
                 visit(key)
                 visit(item[key])
             digest.update(b"}")
-        elif isinstance(item, (tuple, list)):
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
             digest.update(f"sequence:{len(item)}[".encode())
             for entry in item:
                 visit(entry)

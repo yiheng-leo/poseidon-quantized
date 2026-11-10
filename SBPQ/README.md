@@ -1,3 +1,12 @@
+# SBPQ on ritchie
+
+新的正式压缩入口是 `python -m SBPQ.sbpq --config configs/sbpq/default.json`。
+校准、产物、独立评估与恢复命令见 [仓库说明](../README.md) 和 [迁移说明](../docs/ritchie_migration.md)。
+新入口只执行压缩；默认使用完整轨迹校准，最终导出不需要 hooks 的 compressed_model.pt。
+
+下文描述保留的作者入口 `python -u run_sbpq_poseidon.py`，它继续使用原始采样/缓存/验证协议和 SBPQ_* 环境变量，
+保存路径不等同于新入口的 save_path。该入口默认优化参数也已更新为本次 NSPwC 实验值。
+
 # SBPQ Poseidon memory and saving behavior
 
 Run the complete experiment from the repository root with:

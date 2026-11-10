@@ -1,0 +1,14 @@
+{
+  "traj_num": 64,
+  "random_calibration": "n",
+  "calibration_seed": 42,
+  "final_time": 20,
+  "time_back": 0,
+  "method": "sapq-layerwise",
+  "init_bits": 9,
+  "target_bits": 8,
+  "activation_bits": 32,
+  "prior_mode": "block_sens",
+  "sensitivity": "sobolev",
+  "sensitivity_normalization": "raw"
+}

@@ -1,0 +1,12 @@
+{
+  "traj_num": 64,
+  "random_calibration": "n",
+  "calibration_seed": 42,
+  "final_time": 20,
+  "time_back": 0,
+  "method": "ptq4vit",
+  "weight_bits": 8,
+  "activation_bits": 8,
+  "ptq_candidates": 100,
+  "ptq_search_rounds": 3
+}

@@ -30,6 +30,8 @@ from collections.abc import Mapping, Sequence
 import torch
 from torch.utils.checkpoint import checkpoint
 import torch.nn as nn
+
+from SBPQ.storage import DiskSequence
 import torch.nn.functional as F
 
 from SBPQ.noise import add_weight_quantization_noise
@@ -460,16 +462,15 @@ class PoseidonNetworkLikelihood(nn.Module):
             )
 
         self.model = model
-        self.frozen_batches = list(
-            frozen_batches
-        )
+        self.frozen_batches = (frozen_batches if isinstance(frozen_batches, DiskSequence)
+                               else list(frozen_batches))
 
         # Clean outputs are fixed optimization targets and do not require
         # gradients.
-        self.clean_network_outputs = [
-            output.detach().cpu()
-            for output in clean_network_outputs
-        ]
+        self.clean_network_outputs = (
+            clean_network_outputs if isinstance(clean_network_outputs, DiskSequence)
+            else [output.detach().cpu() for output in clean_network_outputs]
+        )
 
         self.num_mc_samples = int(
             num_mc_samples

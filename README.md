@@ -1,151 +1,79 @@
-# Poseidon: Efficient Foundation Models for PDEs
+# Poseidon Quantization — ritchie
 
-This is the source code for the paper [*Poseidon: Efficient Foundation Models for PDEs*](https://arxiv.org/abs/2405.19101). It also acts as a package if you want to use the models in your code.
+Poseidon 的 SBPQ 与各个 baseline 使用独立入口，共用完整轨迹校准、模型导出和独立评估接口。
+SBPQ 的默认优化配置来自本次 NSPwC Table 3 复现实验；校准采样改为旧 SAPQ 仓库 ritchie 的完整轨迹协议。
 
-![Poseidon](assets/fig1.png)
+| 方法 | 量化入口 |
+|---|---|
+| SBPQ | `python -m SBPQ.sbpq`（global） |
+| UniformQ | `python -m UniformQ.uniformq` |
+| DynamicQ | `python -m DynamicQ.dynamicq` |
+| StaticQ | `python -m StaticQ.staticq` |
+| PPQ | `python -m PPQ.ppq --variant global` / `layerwise` |
+| SAPQ | `python -m SAPQ.sapq --variant global` / `network` / `block` / `layerwise` |
+| BRECQ | `python -m BRECQ.brecq` |
+| RepQ | `python -m RepQ.repq` |
+| PTQ4ViT | `python -m PTQ4ViT.ptq4vit` |
 
-Find pretrained models and pretraining dataset in our collection on the [🤗 Hub – Pretrained Models and Pretraining Datasets](https://huggingface.co/collections/camlab-ethz/poseidon-664fa125729c53d8607e209a). All datasets corresponding to downstream tasks can be downloaded from the respective collection on the [🤗 Hub – Downstream Tasks](https://huggingface.co/collections/camlab-ethz/poseidon-downstream-tasks-664fa237cd6b0c097971ef14) as well. To use them, follow the respective sections below.
-
-## Usage
-
-### Installation & Requirements
-
-To get all requirements and install the package, run (inside this folder), after getting this repository:
-
-```bash
-pip install -e .
-```
-
-We recommend running the above command in a [virtual environment](https://docs.python.org/3/library/venv.html).
-
-After installation, you can import the models and use the training and inference scripts from everywhere on your system.
-
-### Using the models in your own code
-
-To use the (pretrained) models in your own code, you can use the following code snippet (after installing):
-
-```python
-from scOT.model import ScOT
-
-model = ScOT.from_pretrained("camlab-ethz/Poseidon-<MODEL_SIZE>")
-```
-
-This will load the pretrained model from the 🤗 Hub. `<MODEL_SIZE>` has to be replaced by `T`, `B`, or `L`, for the respective pretrained model. You can also load a model from a local path by providing the path to the `from_pretrained` method.
-
-To finetune and replace embeddings and recovery parameters, load the model as follows:
-
-```python
-from scOT.model import ScOT
-
-model = ScOT.from_pretrained("camlab-ethz/Poseidon-<MODEL_SIZE>", config=model_config, ignore_mismatched_sizes=True)
-```
-
-Here, `model_config` is a `ScOTConfig` with the correct input/output dimensions. We also refer to [the training/finetuning script](scOT/train.py), see below on usage, which might be easier.
-
-### Training & Finetuning
-
-The easiest way to finetune **Poseidon** on your own dataset is by plugging in your own dataset and running the provided training script as follows:
+在仓库根目录执行；显式命令行参数覆盖 JSON 配置。新入口使用 CLI/JSON 设置 SBPQ，不读取旧的 `SBPQ_*` 实验环境变量。
 
 ```bash
-accelerate launch scOT/train.py \
-    --config <WANDB_CONFIG_FILE> \
-    --wandb_run_name <WANDB_RUN_NAME> \
-    --wandb_project_name <WANDB_PROJECT_NAME> \
-    --checkpoint_path <CHECKPOINT_PATH> \
-    --data_path <DATA_PATH> \
-    --finetune_from <PRETRAINED_MODEL> \
-    --replace_embedding_recovery <SET ONLY IF EMBED/RECOVERY NEEDS TO BE REPLACED>
+python -m pip install -r setting_environment/quantization_requirements.txt
+
+python -u -m SBPQ.sbpq --config configs/sbpq/default.json \
+  --model_path /path/to/poseidon/fluids.incompressible.PiecewiseConstants \
+  --dataset fluids.incompressible.PiecewiseConstants \
+  --data_path /path/to/down_streams --DEV cuda \
+  --traj_num 64 --random_calibration n --calibration_seed 42 \
+  --final_time 20 --time_back 0 --batch_size 2 \
+  --save_path quantization_artifacts/NS-PwC/sbpq-traj64
+
+python -m evaluation.evaluate \
+  --model_path quantization_artifacts/NS-PwC/sbpq-traj64 \
+  --checkpoint /path/to/poseidon/fluids.incompressible.PiecewiseConstants \
+  --dataset fluids.incompressible.PiecewiseConstants \
+  --data_path /path/to/down_streams --DEV cuda \
+  --final_time 20 --batch_size 8 --physics_batch_size 10 \
+  --output_path quantization_evaluation/NS-PwC/sbpq-traj64.json
 ```
 
-For more arguments and options, see the help message of the script:
-    
+SBPQ 默认：init/reference bits=8、bounds=1..16、κ=150、Δbits=2、prior scale=1、MC=10、eta=1e-6、
+AdamW lr=3.75e-5、weight decay=0、无梯度裁剪、800 个累计优化步；敏感度使用 task MSE + 二阶 Sobolev L1，
+各阶权重均为 1，weight range 使用经验分位数 p=1e-4。目标 bits 是先验中心，不是硬性平均位宽约束。
+
+默认选取训练集前 64 条完整轨迹，所有时间对参与校准快照与敏感度计算；`--random_calibration y`
+改为由 calibration seed 决定的无放回轨迹选择。不会再默认截取 512 个打乱的 minibatch。
+Wave-Gaussians 使用 `--final_time 15`。`--batch_size` 同时影响敏感度的 batch 均值，应作为实验设置记录。
+
+**800 步是优化预算，不是完整校准遍历次数。** 优化沿校准 batch 顺序循环；若总 batch 数超过 800，
+likelihood 只使用前 800 个 batch，敏感度仍使用全部选中样本。日志和 metadata 会报告覆盖量；
+需要完整优化遍历时，将 `--total_steps` 设为校准 batch 数或其倍数。
+
+每次压缩保存 `compressed_model.pt`、`metadata.json`、`quantization_state.pt`；SBPQ 还保存
+`sbpq_checkpoint.pt`、`sbpq_trainer_state.pt`、`history.json` 和准备缓存。
+最终权重按步长一次性 round，推理不需要量化 hooks、MC 或旧缓存。这些是浮点 QDQ 产物，未做整数打包。
+
+恢复时保留原命令的模型、数据、采样和优化设置，追加：
+
 ```bash
-accelerate launch scOT/train.py --help
+# 在上面的量化命令中追加；total_steps 是包含已有进度的累计目标。
+--resume quantization_artifacts/NS-PwC/sbpq-traj64 --total_steps 800
 ```
 
-Since the code is built on top of [🤗 Accelerate](https://huggingface.co/docs/accelerate/en/index), you should run `accelerate config` first.
+默认每 100 步原子保存。新校准集不复用作者旧的 basename 缓存；准备缓存验证模型、数据内容、层集合、
+归一化与损失实现。改变这些设置必须使用新的输出目录。恢复会校验校准数据及优化状态。
 
-We also make heavy use of [Weights and Biases](wandb.com) to log and organise all our runs. The code might run without it (by setting `WANDB_MODE=disabled`), but we don't give any guarantees as this probably breaks the folder structure.
+量化入口不加载验证集或测试集。独立评估沿用旧 ritchie 与 SAFE-SVD 对齐的测试集全时间对协议，
+JSON 仅输出平均 bits、指标原值与相对变化百分比；这不是论文历史的 256 样本验证口径。
 
-Most of the actual training configuration is set in a YAML config file (see for all arguments to set for a single W&B [run](configs/run.yaml) or a W&B [sweep](configs/sweep.yaml) (multiple runs, see the [W&B documentation](https://docs.wandb.ai/guides/sweeps) on how to start a sweep)). The config file is passed to the training script via the `--config` argument.
+作者入口 `python -u run_sbpq_poseidon.py` 仍保留原校准和验证流程，默认优化参数已更新为上述配置，
+继续支持旧 `SBPQ_*` 环境变量及旧 checkpoint。需要复查历史 Table 3 时使用该入口；
+新 `SBPQ.sbpq` 的校准数据已改变，不承诺逐值复现历史结果。
 
-We do our pretrainings with the same script.
+- [迁移来源、校准与方法范围](docs/ritchie_migration.md)
+- [代码目录](docs/layout.md)
+- [SBPQ 方法](SBPQ/methodology.md)
+- [独立评估协议](docs/poseidon_evaluation.md)
+- [公共量化协议及旧 SAPQ origin](quantization/README.md)
 
-### Inference/Testing
-
-To evaluate a model on a dataset, you can use the inference script, for all possible arguments see the help message:
-
-```bash
-python -m scOT.inference --help
-```
-
-## Datasets
-
-We provide all datasets used in the paper on the 🤗 Hub. You can download them from the respective collections: 
-- [🤗 Hub – Pretraining Datasets](https://huggingface.co/collections/camlab-ethz/poseidon-664fa125729c53d8607e209a)
-- [🤗 Hub – Downstream Tasks](https://huggingface.co/collections/camlab-ethz/poseidon-downstream-tasks-664fa237cd6b0c097971ef14)
-
-### Naming convention in the code
-
-In the code, we refer to the datasets by a different identifier than on the 🤗 Hub, see the following table for a mapping:
-
-| Code Identifier | 🤗 Hub/Paper Identifier |
-| ----------------|------------------------- |
-|fluids.incompressible.Sines| NS-Sines|
-|fluids.incompressible.Gaussians| NS-Gauss|
-|fluids.compressible.Riemann|CE-RP|
-|fluids.compressible.RiemannCurved|CE-CRP|
-|fluids.compressible.KelvinHelmholtz|CE-KH|
-|fluids.compressible.Gaussians|CE-Gauss|
-|fluids.incompressible.PiecewiseConstants|NS-PwC|
-|fluids.incompressible.VortexSheet|NS-SVS|
-|fluids.incompressible.BrownianBridge|NS-BB|
-|fluids.incompressible.ShearLayer|NS-SL|
-|fluids.incomressible.PiecewiseConstants.tracer|NS-Tracer-PwC|
-|fluids.incompressible.forcing.KolmogorovFlow|FNS-KF|
-|fluids.compressible.RiemannKelvinHelmholtz|CE-RPUI|
-|fluids.compressible.RichtmyerMeshkov|CE-RM|
-|fluids.compressible.gravity.RayleighTaylor|GCE-RT|
-|wave.Layer|Wave-Layer|
-|wave.Gaussians|Wave-Gauss|
-|reaction_diffusion.AllenCahn|ACE|
-|fluids.compressible.steady.Airfoil(.time)|SE-AF|
-|elliptic.poisson.Gaussians(.time)|Poisson-Gauss|
-|elliptic.Helmholtz(.time)|Helmholtz|
-
-Adding the suffix `.time` to the dataset identifier will load the dataset as time-dependent dataset, i.e. as a long-time limit – use that suffix for finetuning on time-independent datasets.
-
-### Download & Assembly
-
-Download all the datasets used in our paper from the 🤗 Hub. You may want to use the CLI provided by the [Hub Python Library](https://huggingface.co/docs/huggingface_hub/en/guides/cli#huggingface-cli-download):
-    
-```bash 
-huggingface-cli download camlab-ethz/<DATASET IDENTIFIER FROM PAPER> --repo-type dataset --local-dir <LOCAL DIRECTORY>
-```
-
-This will download a specific dataset to the specified `LOCAL DIRECTORY`. After download, you need to assemble the datasets to the format expected by the code; for that, we refer to the README in the respective dataset repository. After assembly, remove the chunked dataset files, as they are not needed for training, and place the assembled dataset at the path you specify as `--data_path` for the training/inference script. You may also specify the 🤗 Hub cache location by specifying the environment variable `HF_HOME` as this is where the download will be performed to.
-
-### Adding your own dataset
-
-We encourage adding your own datasets. For that, you can subclass from [BaseDataset and BaseTimeDataset](scOT/problems/base.py) and add it to the `get_dataset` selector method. You can then use the dataset in the training script by specifying the dataset identifier in the config file.
-
-For subclassing, we refer to the docstrings in the base classes and the existing datasets in the [problems](scOT/problems) folder.
-
-## Pretrained models
-
-Pretrained models are available on the 🤗 Hub, see the [Poseidon collection](https://huggingface.co/collections/camlab-ethz/poseidon-664fa125729c53d8607e209a) for all models. You can download them via the 🤗 Hub API or by using the `from_pretrained` method, see above.
-
-## Citation
-
-If you use our models, code, or datasets, please consider citing our paper:
-
-```bibtex
-@misc{herde2024poseidon,
-      title={Poseidon: Efficient Foundation Models for PDEs}, 
-      author={Maximilian Herde and Bogdan Raonić and Tobias Rohner and Roger Käppeli and Roberto Molinaro and Emmanuel de Bézenac and Siddhartha Mishra},
-      year={2024},
-      eprint={2405.19101},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
-}
-```
+验证：`python -m pytest`，只收集 `tests/` 和 `SBPQ/tests/`。

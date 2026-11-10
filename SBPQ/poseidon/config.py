@@ -47,7 +47,7 @@ class SBPQConfig:
     data_path: str = "dataset/NS-PwC"
     dataset_name: str = "fluids.incompressible.PiecewiseConstants"
 
-    quant_layer_file: str = "L_quantize_layers.pt"
+    quant_layer_file: str = "L_quantize_layers.json"
 
     # ==================================================
     # Runtime
@@ -64,7 +64,7 @@ class SBPQConfig:
     calib_batch_size: int = 2
     calib_steps: int = 512
 
-    val_batch_size: int = 512
+    val_batch_size: int = 128
     val_steps: int = 2
     num_workers: int = 0
 
@@ -85,7 +85,7 @@ class SBPQConfig:
     # ==================================================
     reference_bits: float = 8.0      # B*
     delta_bits: float = 2.0          # Delta_B
-    beta_kappa: float = 10.0         # concentration
+    beta_kappa: float = 150.0         # concentration
     beta_prior_scale: float = 1.0
 
     beta_epsilon: float = 1e-6
@@ -102,15 +102,15 @@ class SBPQConfig:
     # PPQ likelihood
     # ==================================================
     eta: float = 1e-6
-    num_mc_samples: int = 5
+    num_mc_samples: int = 10
     likelihood_scale: float = 1.0
 
     # ==================================================
     # Optimization
     # ==================================================
     num_epochs: int = 20
-    num_optimization_steps: int | None = None
-    learning_rate: float = 1e-4
+    num_optimization_steps: int | None = 800
+    learning_rate: float = 3.75e-5
     updates_per_batch: int = 1
     weight_decay: float = 0.0
     gradient_clip_norm: float | None = None
@@ -122,12 +122,9 @@ class SBPQConfig:
     # ==================================================
     # Sobolev setting
     # ==================================================
-    sobolev_order: int = 1
+    sobolev_order: int = 2
 
-    sobolev_order_weights: float | tuple[float, ...] = (
-        1.0,  # order 0
-        1.0,  # order 1
-    )
+    sobolev_order_weights: float | tuple[float, ...] = 1.0
 
     sobolev_norm: str = "l1"
     sobolev_transpose: bool = False

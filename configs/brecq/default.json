@@ -1,0 +1,12 @@
+{
+  "traj_num": 64,
+  "random_calibration": "n",
+  "calibration_seed": 42,
+  "final_time": 20,
+  "time_back": 0,
+  "method": "brecq",
+  "weight_bits": 8,
+  "activation_bits": 32,
+  "reconstruction_iterations": 20000,
+  "rec_batchsize": 32
+}

@@ -234,6 +234,10 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     destination = Path(args.save_path)
     if (destination / "compressed_model.pt").exists() and not args.overwrite and not args.resume:
         raise FileExistsError(f"Artifact already exists: {destination}; choose a new --save_path or --overwrite")
+    if args.method in PROBABILISTIC_METHODS | {"brecq"}:
+        from .runtime import check_optimizer_runtime
+        progress_write("Checking PyTorch optimizer runtime...")
+        check_optimizer_runtime(device, "AdamW" if args.method == "sbpq" else "Adam")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

@@ -67,6 +67,8 @@ def test_methods_without_offline_calibration_do_not_open_data(method, tmp_path, 
         raise AssertionError("This configuration must not load a calibration dataset")
 
     monkeypatch.setattr(quantization.calibration, "build_calibration_loader", forbidden)
+    import quantization.runtime
+    monkeypatch.setattr(quantization.runtime, "check_optimizer_runtime", forbidden)
     args = build_parser(method).parse_args([
         "--DEV", "cpu", "--activation_bits", "32", "--data_path", str(tmp_path / "absent-data"),
         "--model_path", str(tmp_path / "absent-original"), "--save_path", str(tmp_path / method),

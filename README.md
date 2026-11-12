@@ -76,4 +76,17 @@ JSON 仅输出平均 bits、指标原值与相对变化百分比；这不是论�
 - [独立评估协议](docs/poseidon_evaluation.md)
 - [公共量化协议及旧 SAPQ origin](quantization/README.md)
 
+BRECQ、PPQ、SAPQ、SBPQ 启动时会先用一个小张量检查对应 Adam/AdamW 优化器，
+在模型加载、校准缓存和 scale 初始化之前暴露内部 PyTorch 导入或 backend 错误。
+这项检查不改变量化算法或随机种子。也可单独在新进程检查环境：
+
+```bash
+python -m quantization.runtime --DEV cuda
+# SBPQ 对应的优化器：
+python -m quantization.runtime --DEV cuda --optimizer AdamW
+```
+
+如果新进程通过、旧长任务曾报内部缺失符号，要检查任务运行期间共享 Python 环境是否被更新；
+若新进程也失败，应先修复环境。此检查不会重装 PyTorch，也不会让旧 BRECQ 工作目录变成可恢复 checkpoint。
+
 验证：`python -m pytest`，只收集 `tests/` 和 `SBPQ/tests/`。

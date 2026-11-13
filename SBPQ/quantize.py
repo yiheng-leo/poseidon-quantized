@@ -15,7 +15,9 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from quantization.cache import CalibrationCache
+from quantization.cache import PersistentCalibration
+from quantization.costs import phase
+from quantization.checkpoints import resolve_resume, forward_cache_identity
 from quantization.common import QuantizationResult, select_quantizable_layers
 from quantization.progress import progress, progress_write
 from SBPQ.poseidon.beta_parameter_builder import (
@@ -108,21 +110,33 @@ def prepare(model, batches, dataset, args, device, directory):
     path = directory / 'sbpq_preparation.pt'
     saved = torch.load(path, map_location='cpu', weights_only=True) if path.exists() else None
     if saved is not None and saved['identity'] != identity:
-        if args.resume or not args.overwrite:
+        legacy = saved['identity']
+        same_inputs = all(legacy.get(key) == value for key, value in identity.items() if key != 'implementation')
+        same_kernels = all(legacy.get('implementation', {}).get(name) == digest
+                           for name, digest in identity['implementation'].items() if name != 'SBPQ/quantize.py')
+        known_legacy_adapter = legacy.get('implementation', {}).get('SBPQ/quantize.py') == 'b17e63acc535078537100973dfbe837d1423878ba8986e9948a68e07f52c5be7'
+        if args.resume and same_inputs and same_kernels and known_legacy_adapter:
+            # The optimizer signature below also verifies ranges, Beta parameters,
+            # clean outputs, layer order and all numerical training settings.
+            identity = legacy
+        elif args.resume or not args.overwrite:
             raise ValueError('SBPQ preparation does not match this model/calibration/loss; use a new save_path')
-        saved = None
+        else:
+            saved = None
     if saved is None:
-        ranges = compute_weight_ranges_poseidon(model, list(layers), device,
-                                                percentile_prob=args.percentile, range_method='percentile')
+        with phase('range_estimation'):
+            ranges = compute_weight_ranges_poseidon(model, list(layers), device,
+                                                    percentile_prob=args.percentile, range_method='percentile')
         # Sensitivity needs gradients through the unmodified FP network. Training
         # immediately clears these buffers and freezes all original weights.
         for parameter in model.parameters():
             parameter.requires_grad_(True)
         try:
-            raw = compute_poseidon_block_sensitivity(
-                model, batches, device, sensitivity_loss(args, dataset),
-                max_batches=None, block_names=active_blocks,
-            )
+            with phase('sensitivity'):
+                raw = compute_poseidon_block_sensitivity(
+                    model, batches, device, sensitivity_loss(args, dataset),
+                    max_batches=None, block_names=active_blocks,
+                )
         finally:
             freeze_model_parameters(model)
         saved = {'identity': identity, 'ranges': {name: {'weight_ranges': value.detach().cpu()}
@@ -155,43 +169,51 @@ def quantize(model, calibration_loader, args, device, work_dir):
     if checkpoint.exists() and not args.resume and not args.overwrite:
         raise FileExistsError(f'SBPQ checkpoint already exists: {checkpoint}; use --resume or a new save_path')
     work_dir = Path(work_dir)
-    snapshot = CalibrationCache(calibration_loader, work_dir)
-    batches = DiskSequence(snapshot.paths)
-    layers, mapping, prepared, beta_path = prepare(
-        model, batches, calibration_loader.dataset, args, device, destination,
-    )
+    with phase('identity_verification'):
+        model_digest = fingerprint(model.state_dict())
+    def clean_record(batch):
+        with torch.no_grad():
+            return {'clean': poseidon_forward(model, batch, device).detach().cpu()}
+    with phase('fp_output_cache'):
+        snapshot = PersistentCalibration(calibration_loader, work_dir / 'sbpq-calibration',
+                                         forward_cache_identity(model_digest, 'sbpq', device), build_record=clean_record)
+    batches = DiskSequence(snapshot.paths, key='batch')
+    batches.batch_sizes = snapshot.batch_sizes
+    with phase('preparation'):
+        layers, mapping, prepared, beta_path = prepare(
+            model, batches, calibration_loader.dataset, args, device, destination,
+        )
     freeze_model_parameters(model)
-    outputs = []
-    with torch.no_grad():
-        for index, batch in enumerate(progress(batches, desc='Cache SBPQ FP outputs')):
-            path = work_dir / f'clean-{index:06d}.pt'
-            torch.save(poseidon_forward(model, batch, device).detach().cpu(), path)
-            outputs.append(path)
-    trainer = SBPQTrainer(
-        model, batches, DiskSequence(outputs), prepared['ranges'], mapping, beta_path,
-        initial_bits=args.init_bits, minimum_bits=args.minimum_bits, maximum_bits=args.maximum_bits,
-        learning_rate=args.learning_rate, num_mc_samples=args.mc_samples, eta=args.eta,
-        prior_scale=args.prior_scale, likelihood_scale=args.likelihood_scale,
-        beta_boundary_epsilon=args.beta_epsilon, weight_decay=0.0, gradient_clip_norm=None,
-        channel_weights=build_channel_parameter_weights(model, list(layers)), device=device,
-    )
+    outputs = DiskSequence(snapshot.paths, key='clean')
+    with phase('optimizer_setup'):
+        trainer = SBPQTrainer(
+            model, batches, outputs, prepared['ranges'], mapping, beta_path,
+            initial_bits=args.init_bits, minimum_bits=args.minimum_bits, maximum_bits=args.maximum_bits,
+            learning_rate=args.learning_rate, num_mc_samples=args.mc_samples, eta=args.eta,
+            prior_scale=args.prior_scale, likelihood_scale=args.likelihood_scale,
+            beta_boundary_epsilon=args.beta_epsilon, weight_decay=0.0, gradient_clip_norm=None,
+            channel_weights=build_channel_parameter_weights(model, list(layers)), device=device,
+        )
     resume_metadata = {'protocol': 'ritchie-complete-trajectory-v1',
                        'preparation_identity': fingerprint(prepared['identity'])}
     if args.resume:
-        trainer.load(resolve_checkpoint(args.resume), expected_metadata=resume_metadata)
+        _, resume_path = resolve_resume(args.resume, args.method)
+        if resume_path:
+            trainer.load(resume_path, expected_metadata=resume_metadata)
     if args.total_steps < len(batches):
         progress_write(f'[INFO] {len(batches)} calibration batches are available; {args.total_steps} updates '
                        'use a prefix of them. Sensitivity uses the full selection. Increase --total_steps '
                        'for one or more complete optimization passes.')
-    trainer.optimize(args.total_steps, checkpoint_path=checkpoint, save_every=args.save_every,
-                     checkpoint_metadata={**resume_metadata, 'target_total_steps': args.total_steps})
+    with phase('optimization'):
+        trainer.optimize(args.total_steps, checkpoint_path=checkpoint, save_every=args.save_every,
+                         checkpoint_metadata={**resume_metadata, 'target_total_steps': args.total_steps})
     trainer.save(destination / 'sbpq_trainer_state.pt', metadata=resume_metadata)
     (destination / 'history.json').write_text(json.dumps(trainer.history, indent=2) + '\n')
     steps = {name: value.detach().cpu().clone() for name, value in trainer.get_step_sizes().items()}
     average = trainer.calculate_average_bitwidth(parameter_weighted=True)
     # Round once at export, matching the original evaluation hook; no clipping
     # or integer bit rounding is introduced. Inference needs no hooks/MC loops.
-    with torch.no_grad():
+    with phase('materialization'), torch.no_grad():
         for name, layer in progress(layers.items(), desc='SBPQ materialize weights', unit='layer'):
             step = steps[name].to(device=layer.weight.device, dtype=layer.weight.dtype).reshape(-1, 1).clamp_min(1e-12)
             layer.weight.copy_(torch.round(layer.weight / step) * step)
@@ -200,7 +222,7 @@ def quantize(model, calibration_loader, args, device, work_dir):
         'weight_only': True, 'activation_bits': 32, 'packed_integer_weights': False,
         'num_layers': len(layers), 'layer_names': list(layers), 'scope': 'selected Linear inside Poseidon blocks',
         'calibration_samples': snapshot.samples, 'calibration_batches': len(batches),
-        'calibration_storage': 'temporary_disk', 'calibration_truncated': False,
+        'calibration_storage': 'persistent_verified_disk', 'calibration_truncated': False,
         'sensitivity_batches': len(batches), 'completed_steps': len(trainer.history),
         'optimization_unique_batches': min(len(trainer.history), len(batches)),
         'optimization_batch_schedule': 'cyclic_source_order',

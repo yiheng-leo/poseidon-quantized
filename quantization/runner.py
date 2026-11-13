@@ -63,7 +63,8 @@ def build_parser(default_method=None, defaults=None, *, family=None):
     parser.add_argument("--model_path", default=os.environ.get("PPQ_MODEL_PATH"))
     parser.add_argument("--data_path", default=os.environ.get(
         "PPQ_DATA_PATH", "poseidon/camlab-ethz/down_streams"))
-    parser.add_argument("--save_path")
+    parser.add_argument("--save_path", help="Output parent for SBPQ/PPQ/BRECQ; parameter-named child is automatic.")
+    parser.add_argument("--output_root", help="Alias for the output parent of parameter-named experiments.")
     parser.add_argument("--batch_size", type=int, default=2,
                         help="Memory batch size; every selected trajectory/time pair is consumed.")
     parser.add_argument("--num_workers", type=int, default=0)
@@ -92,6 +93,7 @@ def build_parser(default_method=None, defaults=None, *, family=None):
     parser.add_argument("--avg_cap_alpha", type=float, default=10.0)
     parser.add_argument("--reconstruction_iterations", type=int, default=20000)
     parser.add_argument("--rec_batchsize", type=int, default=32)
+    parser.add_argument("--reconstruction_lr", type=float, default=1e-3)
     parser.add_argument("--ptq_candidates", type=int, default=100)
     parser.add_argument("--ptq_search_rounds", type=int, default=3)
     parser.add_argument("--overwrite", action="store_true")
@@ -99,8 +101,9 @@ def build_parser(default_method=None, defaults=None, *, family=None):
                         help="Keep this run's temporary calibration/reconstruction caches.")
     parser.add_argument("--total_steps", "--total-steps", type=int, default=800,
                         help="SBPQ cumulative optimizer steps, including restored progress.")
-    parser.add_argument("--resume", help="SBPQ checkpoint file or artifact directory.")
+    parser.add_argument("--resume", help="SBPQ/PPQ/BRECQ checkpoint file or experiment directory.")
     parser.add_argument("--save_every", "--save-every", type=int, default=100)
+    parser.add_argument("--profile_interval", type=float, default=0.1, help="CPU process-tree sampling interval in seconds.")
     parser.add_argument("--beta_kappa", type=float, default=150.0)
     parser.add_argument("--delta_bits", type=float, default=2.0)
     parser.add_argument("--minimum_bits", type=float, default=1.0)
@@ -124,8 +127,10 @@ def validate_args(args):
     if getattr(args, "origin", False):
         from SAPQ.origin import apply_defaults
         apply_defaults(args)
-    if args.resume and args.method != "sbpq":
-        raise ValueError("--resume is currently supported by SBPQ only")
+    if args.resume and args.method not in {"sbpq", "brecq", "ppq", "ppq-layerwise"}:
+        raise ValueError("--resume supports SBPQ, PPQ and BRECQ")
+    if args.save_every < 1 or args.profile_interval <= 0 or args.reconstruction_lr <= 0:
+        raise ValueError("save_every, profile_interval and reconstruction_lr must be positive")
     if args.method == "sbpq":
         from SBPQ.quantize import validate_settings
         validate_settings(args)
@@ -161,9 +166,8 @@ def validate_args(args):
     if args.model_path is None:
         args.model_path = str(Path("checkpoints") / args.model_name / args.use_phyloss
                               / args.dataset / "origin" / "none")
-    if args.resume and args.save_path is None:
-        from SBPQ.resume import resolve_checkpoint
-        args.save_path = str(resolve_checkpoint(args.resume).parent)
+    from .experiments import resolve_output
+    resolve_output(args)
     if args.save_path is None:
         tag = f"traj{args.traj_num}"
         if args.random_calibration == "y":
@@ -221,93 +225,139 @@ def _implementation_hashes():
 
 
 def run_quantization(args, *, model=None, calibration_loader=None, calibration_metadata=None):
-    """Single production path, also accepting injected models/data for integration tests."""
+    """Shared lifecycle, cost accounting and immutable experiment configuration."""
     import numpy as np
     import torch
     from .artifacts import save_quantized_artifact
     from .calibration import build_calibration_loader
     from .common import resolve_device
     from .progress import progress_write
+    from .checkpoints import RESUMABLE, atomic_json
+    from .costs import CostTracker, track, phase, counter
+    from .experiments import register_experiment
 
     args = validate_args(args)
     device = resolve_device(args.DEV)
     destination = Path(args.save_path)
+    progress_write(f'Experiment directory: {destination}')
     if (destination / "compressed_model.pt").exists() and not args.overwrite and not args.resume:
-        raise FileExistsError(f"Artifact already exists: {destination}; choose a new --save_path or --overwrite")
+        raise FileExistsError(f"Artifact already exists: {destination}; choose another parent or --overwrite")
     if args.method in PROBABILISTIC_METHODS | {"brecq"}:
         from .runtime import check_optimizer_runtime
         progress_write("Checking PyTorch optimizer runtime...")
         check_optimizer_runtime(device, "AdamW" if args.method == "sbpq" else "Adam")
+    if args.method in RESUMABLE:
+        register_experiment(args)
+        if args.overwrite and not args.resume:
+            for name in ('work', 'checkpoints'):
+                shutil.rmtree(destination / name, ignore_errors=True)
+            for name in ('metadata.json', 'compressed_model.pt', 'quantization_state.pt',
+                         'history.json', 'sbpq_checkpoint.pt', 'brecq_checkpoint.pt', 'ppq_checkpoint.pt',
+                         'sbpq_trainer_state.pt', 'sbpq_preparation.pt', 'sbpq_beta_parameters.pt'):
+                (destination / name).unlink(missing_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-
+    work_dir = (destination / 'work' if args.method in RESUMABLE else
+                Path(tempfile.mkdtemp(prefix='work-', dir=destination)))
+    work_dir.mkdir(exist_ok=True)
+    tracker = CostTracker(destination / 'costs.json', device, interval=args.profile_interval,
+                          resume=bool(args.resume))
+    tracker.session['source_revision'] = _revision()
+    if args.resume and tracker.report.get('unmeasured_history_before_first_session') and (destination / 'metadata.json').exists():
+        previous = json.loads((destination / 'metadata.json').read_text())
+        tracker.report['legacy_reported_elapsed_quantization_seconds'] = previous.get('elapsed_quantization_seconds')
+    tracker.session['runtime_settings'] = {'save_every': args.save_every, 'num_workers': args.num_workers,
+                                           'profile_interval': args.profile_interval, 'resume': bool(args.resume)}
     started = time.perf_counter()
-    needs_calibration = args.method not in {"fp", "uniform", "dynamic"} and not (
-        args.method == "static" and args.activation_bits == 32)
-    if calibration_loader is None and needs_calibration:
-        progress_write("Preparing calibration dataset...")
-        if getattr(args, "origin", False):
-            from SAPQ.origin import build_calibration_loader as build_origin_loader
-            _, calibration_loader, calibration_metadata = build_origin_loader(args)
-        else:
-            _, calibration_loader, calibration_metadata = build_calibration_loader(args)
-    elif calibration_loader is not None and calibration_metadata is None:
-        raise ValueError("Injected calibration_loader requires calibration_metadata")
-    elif calibration_metadata is None:
-        calibration_metadata = {"dataset": args.dataset, "selection": "not_required",
-                                "num_trajectories": 0, "num_samples": 0,
-                                "reason": "This method/configuration does not consume offline calibration data."}
-    if model is None:
-        progress_write(f"Loading full-precision model: {args.model_path}")
-        model = _load_model(args.model_path, device)
-    model.to(device).eval()
-    for parameter in model.parameters():
-        parameter.requires_grad_(False)
-    destination.mkdir(parents=True, exist_ok=True)
-    work_dir = Path(tempfile.mkdtemp(prefix="work-", dir=destination))
-    print("Calibration: " + json.dumps({key: calibration_metadata.get(key) for key in
-          ("dataset", "num_trajectories", "num_samples", "selection", "fingerprint")}), flush=True)
-    print(f"Quantizing with {args.method} on {device}; output: {destination}", flush=True)
     succeeded = False
+    final_status = 'interrupted'
+    metadata = None
+    atomic_json({'status': 'preparing', 'method': args.method}, destination / 'run_state.json')
     try:
-        if args.method == "fp":
-            from .common import QuantizationResult
-            result = QuantizationResult(model, {
-                "method": "fp", "weight_bits": 32, "activation_bits": 32,
-                "execution": "floating_point", "packed_integer_weights": False,
-                "quantized_layers": [], "calibration_samples": 0, "calibration_batches": 0,
-            })
-        else:
-            implementation = importlib.import_module(METHOD_MODULES[args.method])
-            result = implementation.quantize(model, calibration_loader, args, device, work_dir)
-        metadata = {
-            "method": args.method,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "source_revision": _revision(),
-            "implementation_sha256": _implementation_hashes(),
-            "source_model_path": str(Path(args.model_path).resolve()),
-            "settings": vars(args).copy(),
-            "calibration": calibration_metadata,
-            "torch_version": torch.__version__,
-            "elapsed_quantization_seconds": time.perf_counter() - started,
-            "evaluation_performed": False,
-        }
-        metadata = save_quantized_artifact(result, destination, metadata, overwrite=args.overwrite or bool(args.resume))
-        succeeded = True
+        with track(tracker):
+            needs_calibration = args.method not in {'fp', 'uniform', 'dynamic'} and not (
+                args.method == 'static' and args.activation_bits == 32)
+            with phase('calibration_loading'):
+                if calibration_loader is None and needs_calibration:
+                    progress_write('Preparing calibration dataset...')
+                    if getattr(args, 'origin', False):
+                        from SAPQ.origin import build_calibration_loader as build_origin_loader
+                        _, calibration_loader, calibration_metadata = build_origin_loader(args)
+                    else:
+                        _, calibration_loader, calibration_metadata = build_calibration_loader(args)
+                elif calibration_loader is not None and calibration_metadata is None:
+                    raise ValueError('Injected calibration_loader requires calibration_metadata')
+                elif calibration_metadata is None:
+                    calibration_metadata = {'dataset': args.dataset, 'selection': 'not_required',
+                                            'num_trajectories': 0, 'num_samples': 0,
+                                            'reason': 'This method/configuration does not consume offline calibration data.'}
+            with phase('model_loading'):
+                if model is None:
+                    progress_write(f'Loading full-precision model: {args.model_path}')
+                    model = _load_model(args.model_path, device)
+                model.to(device).eval()
+                for parameter in model.parameters():
+                    parameter.requires_grad_(False)
+            args._calibration_metadata = calibration_metadata
+            print('Calibration: ' + json.dumps({key: calibration_metadata.get(key) for key in
+                  ('dataset', 'num_trajectories', 'num_samples', 'selection', 'fingerprint')}), flush=True)
+            print(f'Quantizing with {args.method} on {device}; output: {destination}', flush=True)
+            if args.method == 'fp':
+                from .common import QuantizationResult
+                result = QuantizationResult(model, {
+                    'method': 'fp', 'weight_bits': 32, 'activation_bits': 32,
+                    'execution': 'floating_point', 'packed_integer_weights': False,
+                    'quantized_layers': [], 'calibration_samples': 0, 'calibration_batches': 0,
+                })
+            else:
+                implementation = importlib.import_module(METHOD_MODULES[args.method])
+                result = implementation.quantize(model, calibration_loader, args, device, work_dir)
+            metadata = {
+                'method': args.method, 'created_at_utc': datetime.now(timezone.utc).isoformat(),
+                'source_revision': _revision(), 'implementation_sha256': _implementation_hashes(),
+                'source_model_path': str(Path(args.model_path).resolve()),
+                'settings': {key: value for key, value in vars(args).items() if not key.startswith('_')},
+                'calibration': calibration_metadata, 'torch_version': str(torch.__version__),
+                'elapsed_quantization_seconds': time.perf_counter() - started,
+                'costs_file': 'costs.json', 'evaluation_performed': False,
+            }
+            with phase('artifact_saving'):
+                metadata = save_quantized_artifact(result, destination, metadata,
+                                                  overwrite=args.overwrite or bool(args.resume))
+                counter('artifact_bytes_written', sum((destination / name).stat().st_size for name in
+                                                      ('compressed_model.pt', 'quantization_state.pt', 'metadata.json')))
+            if not args.keep_work_dir:
+                with phase('cache_cleanup'):
+                    try:
+                        shutil.rmtree(work_dir)
+                    except OSError as cleanup_error:
+                        tracker.session['cache_cleanup_error'] = str(cleanup_error)
+            succeeded = True
+            final_status = 'completed'
+            atomic_json({'status': 'completed', 'method': args.method}, destination / 'run_state.json')
+    except BaseException as error:
+        final_status = 'interrupted' if isinstance(error, (KeyboardInterrupt, SystemExit)) else 'failed'
+        atomic_json({'status': 'interrupted' if isinstance(error, KeyboardInterrupt) else 'failed',
+                     'method': args.method, 'error': f'{type(error).__name__}: {error}'},
+                    destination / 'run_state.json')
+        raise
     finally:
-        if succeeded and not args.keep_work_dir:
-            shutil.rmtree(work_dir)
-        elif work_dir.exists():
-            print(f"Work files retained at {work_dir}", flush=True)
+        tracker.close(final_status)
+        if not succeeded:
+            print(f'Preparation/checkpoints retained at {destination}; work: {work_dir}', flush=True)
+    metadata['costs_summary'] = tracker.snapshot()['cumulative']
+    atomic_json(metadata, destination / 'metadata.json')
+    print(f"Recorded optimization time: {metadata['costs_summary']['optimization_seconds']:.3f}s; costs: {destination / 'costs.json'}", flush=True)
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
-    evaluation_time = (15 if args.dataset == "wave.Gaussians" else 20) if getattr(args, "origin", False) else args.final_time
-    print("Evaluate separately with: " + shlex.join([
-        "python", "-m", "evaluation.evaluate", "--model_path", str(destination),
-        "--dataset", args.dataset, "--data_path", str(args.data_path),
-        "--final_time", str(evaluation_time), "--DEV", args.DEV]), flush=True)
+    evaluation_time = (15 if args.dataset == 'wave.Gaussians' else 20) if getattr(args, 'origin', False) else args.final_time
+    print('Evaluate separately with: ' + shlex.join([
+        'python', '-m', 'evaluation.evaluate', '--model_path', str(destination),
+        '--dataset', args.dataset, '--data_path', str(args.data_path),
+        '--final_time', str(evaluation_time), '--DEV', args.DEV]), flush=True)
     return destination, metadata
 
 
@@ -319,9 +369,14 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
     config_parser.add_argument("--method")
     config_parser.add_argument("--variant")
     config_parser.add_argument("--origin", action="store_true")
+    config_parser.add_argument("--resume")
     explicit = config_parser.parse_known_args(argv)[0]
     config_path = explicit.config
-    configured_method = None
+    saved_defaults = {}
+    if explicit.resume:
+        from .experiments import resume_defaults
+        saved_defaults = resume_defaults(explicit.resume, explicit.method or default_method)
+    configured_method = saved_defaults.get('method')
     if config_path:
         try:
             configured_method = json.loads(Path(config_path).read_text(encoding="utf-8")).get("method")
@@ -330,6 +385,13 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
     if (explicit.method or configured_method or default_method) == "sbpq":
         from SBPQ.defaults import DEFAULTS
         parser.set_defaults(**{**DEFAULTS, **(defaults or {})})
+    elif (explicit.method or configured_method or default_method) == "brecq":
+        parser.set_defaults(save_every=1000)
+    if saved_defaults:
+        actions = {action.dest: action for action in parser._actions}
+        parser.set_defaults(**{key: value for key, value in saved_defaults.items() if key in actions})
+        if 'method' in saved_defaults:
+            actions['method'].required = False
     values = {}
     if config_path:
         try:

@@ -8,5 +8,7 @@
   "weight_bits": 8,
   "activation_bits": 32,
   "reconstruction_iterations": 20000,
-  "rec_batchsize": 32
+  "rec_batchsize": 32,
+  "reconstruction_lr": 0.001,
+  "save_every": 1000
 }

@@ -606,6 +606,10 @@ class SBPQTrainer:
             result = self.train_step(
                 batch_index=batch_index,
             )
+            from quantization.costs import counter
+            counter('optimization_updates')
+            if hasattr(self.frozen_batches, 'batch_sizes'):
+                counter('optimization_samples', self.frozen_batches.batch_sizes[batch_index])
             if checkpoint_path is not None and (
                 (step_index + 1) % save_every == 0 or step_index + 1 == number_of_steps
             ):
@@ -784,39 +788,42 @@ class SBPQTrainer:
         """
         Save optimized step sizes and trainer state.
         """
-        save_path = Path(
-            save_path
-        )
+        from quantization.costs import phase
+        with phase('checkpoint_saving'):
+            save_path = Path(
+                save_path
+            )
 
-        save_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+            save_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
-        state = self.get_state_dict()
+            state = self.get_state_dict()
 
-        state["metadata"] = (
-            metadata or {}
-        )
+            state["metadata"] = (
+                metadata or {}
+            )
 
-        state["optimized_step_sizes"] = {
-            layer_name: step_size.detach().cpu()
-            for layer_name, step_size
-            in self.get_step_sizes().items()
-        }
+            state["optimized_step_sizes"] = {
+                layer_name: step_size.detach().cpu()
+                for layer_name, step_size
+                in self.get_step_sizes().items()
+            }
 
-        state["effective_bitwidths"] = {
-            layer_name: bitwidth.detach().cpu()
-            for layer_name, bitwidth
-            in self.get_effective_bitwidths().items()
-        }
+            state["effective_bitwidths"] = {
+                layer_name: bitwidth.detach().cpu()
+                for layer_name, bitwidth
+                in self.get_effective_bitwidths().items()
+            }
 
-        atomic_save(state, save_path)
+            from quantization.checkpoints import save_checkpoint
+            save_checkpoint(state, save_path)
 
-        print(
-            f"[INFO] Saved SBPQ trainer state to: {save_path}"
-            f" (completed_steps={len(self.history)})"
-        )
+            print(
+                f"[INFO] Saved SBPQ trainer state to: {save_path}"
+                f" (completed_steps={len(self.history)})"
+            )
 
     def load(
         self,

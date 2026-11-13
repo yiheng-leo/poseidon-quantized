@@ -1,5 +1,8 @@
 # Poseidon quantization：MySVD 校准协议
 
+SBPQ、BRECQ、PPQ 的参数子目录命名、资源成本与断点恢复，以 [当前说明](../docs/costs_and_resume.md) 为准。
+这三个方法的 save_path 是父目录，完整运行路径由程序生成并打印。
+
 本分支把 Poseidon 的量化流程统一成三个阶段：加载同一份校准集、执行量化、保存模型。
 评估由 `python -m evaluation.evaluate` 单独执行。默认生产入口不读取旧的 `/lus/...`
 范围、步长、Fisher 或校准 batch 缓存，也不在训练期间构造验证/测试集。

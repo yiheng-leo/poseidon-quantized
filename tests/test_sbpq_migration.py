@@ -93,11 +93,27 @@ def test_export_and_resume_match_continuous_with_full_calibration(tiny_scot_case
     def forbidden(*args, **kwargs):
         raise AssertionError('Compression attempted to construct another dataset')
     monkeypatch.setattr(calibration, 'build_calibration_loader', forbidden)
-    continuous, interrupted = tmp_path / 'continuous', tmp_path / 'interrupted'
-    for destination, steps, extra in [(continuous, 4, ()), (interrupted, 2, ()),
-                                      (interrupted, 4, ('--resume', str(interrupted)))]:
-        run_quantization(options(destination, steps, extra), model=deepcopy(template),
-                         calibration_loader=loader, calibration_metadata=metadata)
+    from SBPQ.trainer import SBPQTrainer
+    continuous_args = options(tmp_path / 'continuous', 4)
+    continuous, _ = run_quantization(continuous_args, model=deepcopy(template),
+                                    calibration_loader=loader, calibration_metadata=metadata)
+    interrupted_args = options(tmp_path / 'interrupted', 4)
+    original_step = SBPQTrainer.train_step
+    attempts = []
+    def interrupt_after_checkpoint(self, *a, **kw):
+        if len(attempts) == 2:
+            raise KeyboardInterrupt
+        attempts.append(True)
+        return original_step(self, *a, **kw)
+    monkeypatch.setattr(SBPQTrainer, 'train_step', interrupt_after_checkpoint)
+    interrupted_args.save_every = 1
+    with pytest.raises(KeyboardInterrupt):
+        run_quantization(interrupted_args, model=deepcopy(template), calibration_loader=loader,
+                         calibration_metadata=metadata)
+    monkeypatch.setattr(SBPQTrainer, 'train_step', original_step)
+    interrupted = Path(interrupted_args.save_path)
+    run_quantization(options(interrupted, 4, ('--resume', str(interrupted))), model=deepcopy(template),
+                     calibration_loader=loader, calibration_metadata=metadata)
     assert len(calls) == 2  # Restart reuses only content-verified sensitivity.
     a = torch.load(continuous / 'sbpq_checkpoint.pt', weights_only=True)
     b = torch.load(interrupted / 'sbpq_checkpoint.pt', weights_only=True)
@@ -130,8 +146,8 @@ def test_export_and_resume_match_continuous_with_full_calibration(tiny_scot_case
     # Same run directory and new calibration bytes must not silently reuse old priors.
     altered = deepcopy(dataset)
     altered.inputs += .25
-    with pytest.raises(ValueError, match='preparation does not match'):
-        run_quantization(options(interrupted, 5, ('--resume', str(interrupted))),
+    with pytest.raises(ValueError, match='Calibration data changed|preparation does not match'):
+        run_quantization(options(interrupted, 4, ('--resume', str(interrupted))),
                          model=deepcopy(model), calibration_loader=DataLoader(altered, batch_size=1),
                          calibration_metadata={**metadata, 'fingerprint': 'changed'})
 

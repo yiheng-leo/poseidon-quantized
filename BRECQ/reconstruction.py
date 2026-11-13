@@ -299,62 +299,104 @@ def _brecq_calibration_batches(calibration, batch_size):
         yield default_collate(pending)
 
 
-def _reconstruct_brecq_block(qnn, block, calibration, iterations, batch_size, directory, device):
-    """Vendor AdaRound/BRECQ objective with a bounded, disk-backed IO cache."""
-
-    qnn.set_quant_state(False, False)
-    block.set_quant_state(True, False)
-    parameters = []
-    for module in block.modules():
-        if isinstance(module, QuantModule):
-            module.weight_quantizer = AdaRoundQuantizer(
-                uaq=module.weight_quantizer, round_mode="learned_hard_sigmoid",
-                weight_tensor=module.org_weight.detach())
-            module.weight_quantizer.soft_targets = True
-            parameters.append(module.weight_quantizer.alpha)
-    if not parameters:
-        raise ValueError("BRECQ reconstruction block contains no weight quantizers")
-    optimizer = torch.optim.Adam(parameters)
-    loss_function = PoseidonLossFunction(block, round_loss="relaxation", weight=0.01,
-                                        max_count=iterations, rec_loss="mse",
-                                        b_range=(20, 2), warmup=0.2, p=2.)
+def _reconstruct_brecq_block(qnn, block, calibration, iterations, batch_size, directory, device,
+                             *, resume_state=None, checkpoint_update=None, restore_current=None,
+                             cache_identity=None, learning_rate=1e-3):
+    """Original AdaRound updates with verified IO reuse and exact iteration resume."""
+    import json
+    from quantization.checkpoints import atomic_json, atomic_save, fingerprint, restore_rng
+    from quantization.costs import phase, counter
+    directory = Path(directory)
+    with phase('optimizer_setup'):
+        qnn.set_quant_state(False, False)
+        block.set_quant_state(True, False)
+        for module in block.modules():
+            if isinstance(module, QuantModule):
+                module.weight_quantizer = AdaRoundQuantizer(
+                    uaq=module.weight_quantizer, round_mode='learned_hard_sigmoid',
+                    weight_tensor=module.org_weight.detach())
+                module.weight_quantizer.soft_targets = True
+        if resume_state and resume_state.get('current_quantizers'):
+            restore_current(resume_state['current_quantizers'])
+        parameters = [module.weight_quantizer.alpha for module in block.modules()
+                      if isinstance(module, QuantModule)]
+        if not parameters:
+            raise ValueError('BRECQ reconstruction block contains no weight quantizers')
+        optimizer = torch.optim.Adam(parameters, lr=learning_rate)
+        if resume_state and resume_state.get('optimizer_state'):
+            optimizer.load_state_dict(resume_state['optimizer_state'])
+        loss_function = PoseidonLossFunction(block, round_loss='relaxation', weight=0.01,
+                                            max_count=iterations, rec_loss='mse',
+                                            b_range=(20, 2), warmup=0.2, p=2.)
+        start = int(resume_state.get('iteration', 0)) if resume_state else 0
+        loss_function.count = int(resume_state.get('loss_count', start)) if resume_state else 0
+        if not 0 <= start <= iterations or loss_function.count != start:
+            raise ValueError('BRECQ saved iteration/loss-schedule count is invalid')
     get_io = PoseidonGetLayerInpOut(qnn, block, torch.device(device), asym=True, act_quant=False)
-    count = 0
-    total_samples = 0
-    cache_total = ((calibration.samples + batch_size - 1) // batch_size
-                   if hasattr(calibration, "samples") else None)
-    batches = progress(_brecq_calibration_batches(calibration, batch_size),
-                       total=cache_total, desc="BRECQ cache block IO", leave=False)
-    for count, batch in enumerate(batches, start=1):
-        total_samples += int(batch["pixel_values"].shape[0])
-        inputs, target = get_io(batch)
-        if inputs is None or target is None:
-            raise ValueError("Calibration did not execute a BRECQ reconstruction block")
-        torch.save({"inputs": inputs, "target": target}, Path(directory) / f"block-{count-1:06d}.pt")
-        # The vendor hook object retains its most recent tensors. Release
-        # these as soon as that batch is written, including device tensors.
-        get_io.data_saver.input_store = None
-        get_io.data_saver.output_store = None
-    if not count:
-        raise ValueError("BRECQ calibration loader is empty")
-    reconstruction = progress(range(iterations), desc="BRECQ AdaRound reconstruction",
-                              unit="iteration", leave=False)
-    for iteration in reconstruction:
-        # Draw a sample uniformly, then reconstruct its stored batch. Batch
-        # selection is proportional to batch size; averaging its loss gives
-        # equal expected weight to every sample, including the final partial
-        # batch. Keep whole batches because attention folds windows into B.
-        index = int(torch.randint(total_samples, (1,))) // batch_size
-        record = torch.load(Path(directory) / f"block-{index:06d}.pt", map_location="cpu", weights_only=False)
-        inputs = move_block_args_to_device(record["inputs"], device)
-        target = record["target"].to(device)
-        optimizer.zero_grad(set_to_none=True)
-        output = get_reconstruction_output(block(*inputs))
-        loss = loss_function(output, target)
-        loss.backward()
-        optimizer.step()
-        if iteration == 0 or (iteration + 1) % 100 == 0 or iteration + 1 == iterations:
-            reconstruction.set_postfix(loss=float(loss.detach()), refresh=False)
+    total_samples, count = 0, 0
+    manifest_path = directory / 'manifest.json'
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    if manifest and manifest['identity'] != cache_identity:
+        raise ValueError('BRECQ block IO cache identity changed')
+    entries = manifest['entries'] if manifest else []
+    with phase('reconstruction_cache'):
+        cache_total = ((calibration.samples + batch_size - 1) // batch_size
+                       if hasattr(calibration, 'samples') else None)
+        batches = progress(_brecq_calibration_batches(calibration, batch_size),
+                           total=cache_total, desc='BRECQ cache block IO', leave=False)
+        for count, batch in enumerate(batches, start=1):
+            total_samples += int(batch['pixel_values'].shape[0])
+            path = directory / f'block-{count-1:06d}.pt'
+            input_digest = fingerprint(batch)
+            if count <= len(entries) and path.exists():
+                record = torch.load(path, map_location='cpu', weights_only=True)
+                if entries[count-1]['input'] != input_digest or entries[count-1]['payload'] != fingerprint(record):
+                    raise ValueError(f'BRECQ block IO cache changed/corrupt: {path}')
+                counter('block_io_records_reused')
+                del record
+            else:
+                inputs, target = get_io(batch)
+                if inputs is None or target is None:
+                    raise ValueError('Calibration did not execute a BRECQ reconstruction block')
+                record = {'inputs': inputs, 'target': target}
+                digest = fingerprint(record)
+                if count <= len(entries):
+                    if entries[count-1] != {'input': input_digest, 'payload': digest}:
+                        raise ValueError('Rebuilt BRECQ IO target differs from checkpoint cache')
+                else:
+                    entries.append({'input': input_digest, 'payload': digest})
+                atomic_save(record, path)
+                counter('cache_bytes_written', path.stat().st_size)
+                counter('block_io_records_written')
+                if count % 32 == 0:
+                    atomic_json({'identity': cache_identity, 'entries': entries, 'complete': False}, manifest_path)
+                get_io.data_saver.input_store = None
+                get_io.data_saver.output_store = None
+        if not count or count < len(entries):
+            raise ValueError('BRECQ calibration is empty or its batch count changed')
+        atomic_json({'identity': cache_identity, 'entries': entries, 'complete': True}, manifest_path)
+    if resume_state and 'rng_state' in resume_state:
+        restore_rng(resume_state['rng_state'], torch.device(device))
+    reconstruction = progress(range(start, iterations), desc='BRECQ AdaRound reconstruction',
+                              unit='iteration', leave=False)
+    with phase('optimization'):
+        for iteration in reconstruction:
+            index = int(torch.randint(total_samples, (1,))) // batch_size
+            record = torch.load(directory / f'block-{index:06d}.pt', map_location='cpu', weights_only=False)
+            inputs = move_block_args_to_device(record['inputs'], device)
+            target = record['target'].to(device)
+            optimizer.zero_grad(set_to_none=True)
+            output = get_reconstruction_output(block(*inputs))
+            loss = loss_function(output, target)
+            loss.backward()
+            optimizer.step()
+            counter('optimization_updates')
+            physical_batch = min(batch_size, total_samples - index * batch_size)
+            counter('optimization_samples', physical_batch)
+            if checkpoint_update:
+                checkpoint_update(iteration + 1, optimizer, loss_function.count)
+            if iteration == 0 or (iteration + 1) % 100 == 0 or iteration + 1 == iterations:
+                reconstruction.set_postfix(loss=float(loss.detach()), refresh=False)
     for module in block.modules():
         if isinstance(module, QuantModule):
             module.weight_quantizer.soft_targets = False

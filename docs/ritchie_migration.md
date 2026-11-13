@@ -1,5 +1,7 @@
 # ritchie 迁移记录
 
+本页记录最初迁移；当前新增的参数命名、成本统计和 BRECQ/PPQ 断点恢复见 [更新说明](costs_and_resume.md)。
+
 迁移基于 poseidon-quantized/main `24354f9dc1d5c767e1f004a958516177efb9802b`，
 公共框架、baseline 实现和独立评估取自
 Structural-Aware-Probablistic-Quantization-for-Foundational-Physical-Models/ritchie

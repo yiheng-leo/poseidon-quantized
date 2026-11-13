@@ -26,15 +26,16 @@ python -u -m SBPQ.sbpq --config configs/sbpq/default.json \
   --data_path /path/to/down_streams --DEV cuda \
   --traj_num 64 --random_calibration n --calibration_seed 42 \
   --final_time 20 --time_back 0 --batch_size 2 \
-  --save_path quantization_artifacts/NS-PwC/sbpq-traj64
+  --save_path quantization_artifacts/NS-PwC
 
+# 复制启动时打印的完整参数子目录替换下面的 /path/to/actual-sbpq-experiment。
 python -m evaluation.evaluate \
-  --model_path quantization_artifacts/NS-PwC/sbpq-traj64 \
+  --model_path /path/to/actual-sbpq-experiment \
   --checkpoint /path/to/poseidon/fluids.incompressible.PiecewiseConstants \
   --dataset fluids.incompressible.PiecewiseConstants \
   --data_path /path/to/down_streams --DEV cuda \
   --final_time 20 --batch_size 8 --physics_batch_size 10 \
-  --output_path quantization_evaluation/NS-PwC/sbpq-traj64.json
+  --output_path /path/to/actual-sbpq-experiment/evaluation-test-safe-svd-ft20-pb10.json
 ```
 
 SBPQ 默认：init/reference bits=8、bounds=1..16、κ=150、Δbits=2、prior scale=1、MC=10、eta=1e-6、
@@ -49,19 +50,28 @@ Wave-Gaussians 使用 `--final_time 15`。`--batch_size` 同时影响敏感度�
 likelihood 只使用前 800 个 batch，敏感度仍使用全部选中样本。日志和 metadata 会报告覆盖量；
 需要完整优化遍历时，将 `--total_steps` 设为校准 batch 数或其倍数。
 
-每次压缩保存 `compressed_model.pt`、`metadata.json`、`quantization_state.pt`；SBPQ 还保存
-`sbpq_checkpoint.pt`、`sbpq_trainer_state.pt`、`history.json` 和准备缓存。
+每次压缩保存 `compressed_model.pt`、`metadata.json`、`quantization_state.pt`；三种可恢复方法另外保存
+方法 checkpoint、experiment.json、costs.json，以及必要的准备缓存/状态分片。
 最终权重按步长一次性 round，推理不需要量化 hooks、MC 或旧缓存。这些是浮点 QDQ 产物，未做整数打包。
 
-恢复时保留原命令的模型、数据、采样和优化设置，追加：
+SBPQ、BRECQ、PPQ 的 `--save_path` 现在是**父目录**：程序自动追加“可读超参数 + 完整配置指纹”的子目录，
+启动时打印实际位置，完整配置保存在 experiment.json。旧断点按原目录恢复。
 
 ```bash
-# 在上面的量化命令中追加；total_steps 是包含已有进度的累计目标。
---resume quantization_artifacts/NS-PwC/sbpq-traj64 --total_steps 800
+python -u -m BRECQ.brecq --resume /path/to/actual-brecq-experiment
+python -u -m PPQ.ppq --resume /path/to/actual-ppq-experiment
+python -u -m SBPQ.sbpq --resume /path/to/actual-sbpq-experiment
+python -m quantization.costs /path/to/actual-experiment
 ```
 
-默认每 100 步原子保存。新校准集不复用作者旧的 basename 缓存；准备缓存验证模型、数据内容、层集合、
-归一化与损失实现。改变这些设置必须使用新的输出目录。恢复会校验校准数据及优化状态。
+BRECQ 支持 scales 初始化中途及块内 Adam/iteration/RNG 恢复；PPQ 支持 unit/epoch/batch 中途恢复；
+SBPQ 保留原有优化器恢复。新实验 resume 自动读原配置，训练超参数必须一致。
+checkpoint 默认保存间隔：BRECQ 配置 1000 次更新，PPQ/SBPQ 100；可用 --save_every 调整。
+旧 BRECQ/PPQ 任务没有保存过优化器状态，不能事后从旧 work-* 文件恢复。
+
+三种方法记录 costs.json：准备/纯优化/保存各阶段墙钟时间、CPU 时间、CPU RSS 峰值、GPU allocated/reserved 峰值、
+更新数和 IO 写入量，区分每次启动与累计成本。纯优化时间排除 checkpoint IO。最终 metadata.json 包含成本摘要。
+CPU RSS 采样、GPU allocator 的统计边界及断点文件说明见 [资源成本与恢复](docs/costs_and_resume.md)。
 
 量化入口不加载验证集或测试集。独立评估沿用旧 ritchie 与 SAFE-SVD 对齐的测试集全时间对协议，
 JSON 仅输出平均 bits、指标原值与相对变化百分比；这不是论文历史的 256 样本验证口径。
@@ -71,6 +81,7 @@ JSON 仅输出平均 bits、指标原值与相对变化百分比；这不是论�
 新 `SBPQ.sbpq` 的校准数据已改变，不承诺逐值复现历史结果。
 
 - [迁移来源、校准与方法范围](docs/ritchie_migration.md)
+- [资源成本、参数命名与断点恢复](docs/costs_and_resume.md)
 - [代码目录](docs/layout.md)
 - [SBPQ 方法](SBPQ/methodology.md)
 - [独立评估协议](docs/poseidon_evaluation.md)

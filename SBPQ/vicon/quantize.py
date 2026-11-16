@@ -14,34 +14,26 @@ from quantization.cache import PersistentCalibration
 from quantization.checkpoints import file_sha256, resolve_resume
 from quantization.common import QuantizationResult
 from quantization.costs import phase
-from quantization.progress import progress, progress_write
+from quantization.progress import progress_write
 from .blocks import build_block_mapping
 from .model_utils import expose_attention, model_forward
-from .objectives import ViconNetworkLikelihood, compute_sensitivity, query_fields
+from .likelihood import ViconNetworkLikelihood
+from .sensitivity import compute_sensitivity
+from .sobolev import query_fields
+from .ranges import compute_weight_ranges
 
 
 def implementation_identity(args):
     local = Path(__file__).resolve().parents[2]
-    external = Path(args.safe_svd_root)
     paths = [*sorted((local / "SBPQ/vicon").glob("*.py")),
              local / "SBPQ/beta_parameters.py", local / "SBPQ/poseidon/beta_parameter_builder.py",
              local / "SBPQ/noise.py", local / "SBPQ/trainer.py", local / "SBPQ/step_sizes.py",
-             *sorted((external / "VICON/src").glob("*.py")),
-             *sorted((external / "safe_svd/helper/collector/vicon").glob("*.py"))]
-    return {str(path.relative_to(local)) if path.is_relative_to(local)
-            else "SafeSVD/" + str(path.relative_to(external)): file_sha256(path) for path in paths}
+             *sorted((local / "SBPQ/vicon/configs").rglob("*.yaml")),
+             local / "SBPQ/vicon/configs/research_calibration_order.json"]
+    return {str(path.relative_to(local)): file_sha256(path) for path in paths}
 
 
 def quantize(model, calibration_loader, args, device, work_dir):
-    # The cropped research model writes position embeddings into tensor slices.
-    # SafeSVD's non-inplace context keeps differentiation valid and is restored
-    # before the final model is serialized. No local bound methods are saved.
-    from safe_svd.helper.collector.vicon.vicon_fisher_forward import _patched_forward
-    with _patched_forward(model):
-        return _quantize(model, calibration_loader, args, device, work_dir)
-
-
-def _quantize(model, calibration_loader, args, device, work_dir):
     model.to(device).eval()
     expose_attention(model)
     torch.set_float32_matmul_precision("high")
@@ -80,12 +72,7 @@ def _quantize(model, calibration_loader, args, device, work_dir):
             raise ValueError("VICON SBPQ preparation changed (model/data/source/loss); use a new save_path")
         if prepared is None:
             with phase("range_estimation"), torch.no_grad():
-                ranges = {}
-                for name, layer in progress(layers.items(), desc="VICON weight ranges", unit="layer"):
-                    weight = layer.weight.detach().float()
-                    value = (torch.quantile(weight, 1 - args.percentile, dim=1)
-                             - torch.quantile(weight, args.percentile, dim=1)).clamp_min(1e-12)
-                    ranges[name] = {"weight_ranges": value.cpu()}
+                ranges = compute_weight_ranges(layers, args.percentile)
             with phase("sensitivity"):
                 raw = compute_sensitivity(model, batches, blocks, args, device)
             prepared = {"identity": preparation_identity, "ranges": ranges, "raw_sensitivity": raw}

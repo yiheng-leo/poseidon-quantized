@@ -19,7 +19,7 @@ def effective_settings(args):
     values.pop('variant', None)  # method already resolves the variant uniquely.
     if values.get('model_type', 'poseidon') == 'poseidon':
         # New model-routing options do not invalidate existing Poseidon resumes.
-        for key in ('model_type', 'safe_svd_root', 'calibration_num', 'config_dir', 'config_name',
+        for key in ('model_type', 'calibration_num', 'config_dir', 'config_name',
                     'config_override', 'vicon_file_order'):
             values.pop(key, None)
     for key in ('model_path', 'data_path'):

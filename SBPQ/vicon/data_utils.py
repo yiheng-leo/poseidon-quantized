@@ -2,24 +2,23 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-import importlib
-import inspect
 from itertools import islice
 from pathlib import Path
 
 import torch
 
 from SBPQ.resume import fingerprint
-from .model_utils import configure_source
+from .dataset import all_datasets
+from .calibration import build_calibration_loaders
+from .file_order import apply_vicon_file_order
 
 
 def load_config(args):
     if hasattr(args, "_vicon_config"):
         return args._vicon_config
-    root = configure_source(args.safe_svd_root)
     from hydra import compose, initialize_config_dir
     from omegaconf import open_dict
-    directory = Path(args.config_dir or root / "VICON/configs").expanduser().resolve()
+    directory = Path(args.config_dir or Path(__file__).parent / "configs").expanduser().resolve()
     with initialize_config_dir(config_dir=str(directory), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=args.config_override)
     with open_dict(cfg):
@@ -101,14 +100,9 @@ class CalibrationBatches:
 def build_calibration_loader(args):
     from omegaconf import OmegaConf
     cfg = load_config(args)
-    dataset_module = importlib.import_module("VICON.src.dataset")
-    from safe_svd.helper.collector.vicon.vicon_calibration_dataset import build_calibration_loaders
-    from safe_svd.helper.collector.vicon.vicon_file_order import apply_vicon_file_order
     dataset_seed = args.calibration_seed if args.random_calibration == "y" else cfg.train_seed
     values = (cfg.datasets, 0, dataset_seed, "train")
-    datasets = (dataset_module.all_datasets(*values, cfg.rollout)
-                if "rollout_cfg" in inspect.signature(dataset_module.all_datasets).parameters
-                else dataset_module.all_datasets(*values))
+    datasets = all_datasets(*values)
     for category, dataset in datasets.items():
         if hasattr(dataset, "dp") and not dataset.dp:
             raise FileNotFoundError(f"No VICON training HDF5 files for {category}: {cfg.datasets.types[category].folder}")

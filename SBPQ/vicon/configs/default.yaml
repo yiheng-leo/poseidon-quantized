@@ -1,0 +1,16 @@
+defaults:
+  - datasets: default
+  - model: default
+  - loss: default
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+train_seed: 42
+test_seed: 84
+dataset_workers: 0
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

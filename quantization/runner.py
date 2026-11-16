@@ -51,7 +51,6 @@ def build_parser(default_method=None, defaults=None, *, family=None):
         for option in ("frozen_batches", "sensitivity", "ranges", "initial_steps", "layers"):
             parser.add_argument(f"--origin_{option}", help=f"Explicit original {option} file.")
     parser.add_argument("--model", "--model_type", dest="model_type", choices=("poseidon", "vicon"), default="poseidon")
-    parser.add_argument("--safe_svd_root", help="SafeSVD checkout containing its experimental VICON/ source.")
     parser.add_argument("--calibration_num", type=int, default=256, help="VICON calibration samples per category.")
     parser.add_argument("--config_dir", help="VICON Hydra configuration directory.")
     parser.add_argument("--config_name", default="default", help="VICON Hydra configuration name.")
@@ -377,14 +376,13 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     print(f"Recorded optimization time: {metadata['costs_summary']['optimization_seconds']:.3f}s; costs: {destination / 'costs.json'}", flush=True)
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
     if args.model_type == 'vicon':
-        command = ['python', str(Path(args.safe_svd_root) / 'evaluation/vicon/evaluate.py'),
-                   '--vicon-root', str(Path(args.safe_svd_root) / 'VICON'), '--checkpoint', str(args.model_path),
-                   '--data-root', str(args.data_path), '--model', str(destination / 'compressed_model.pth'),
-                   '--config-dir', args.config_dir, '--config-name', args.config_name,
-                   '--batch-size', str(args.batch_size), '--device', args.DEV,
-                   '--output', str(destination / 'evaluation.json')]
+        command = ['python', '-m', 'SBPQ.vicon.evaluate', '--checkpoint', str(args.model_path),
+                   '--data_path', str(args.data_path), '--model_path', str(destination),
+                   '--config_dir', args.config_dir, '--config_name', args.config_name,
+                   '--batch_size', str(args.batch_size), '--DEV', args.DEV,
+                   '--num_workers', str(args.num_workers), '--output_path', str(destination / 'evaluation.json')]
         for override in args.config_override:
-            command += ['--config-override', override]
+            command += ['--config_override', override]
     else:
         evaluation_time = (15 if args.dataset == 'wave.Gaussians' else 20) if getattr(args, 'origin', False) else args.final_time
         command = ['python', '-m', 'evaluation.evaluate', '--model_path', str(destination),

@@ -105,9 +105,6 @@ def load_quantized_artifact(path, device="cpu"):
         expected = metadata.get("model_sha256")
         if expected is not None and _sha256(model_file) != expected:
             raise ValueError(f"Artifact checksum does not match metadata: {model_file}")
-        if metadata.get("artifact_type") == "vicon_quantization":
-            from SBPQ.vicon.model_utils import configure_source
-            configure_source(metadata.get("settings", {}).get("safe_svd_root"))
     # Full module serialization deliberately follows MySVD. Load only trusted files.
     model = torch.load(model_file, map_location="cpu", weights_only=False, pickle_module=compat)
     if not isinstance(model, nn.Module):

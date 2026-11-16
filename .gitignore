@@ -90,6 +90,8 @@ VICON/
 !SBPQ/vicon/
 !SBPQ/vicon/*.py
 !SBPQ/vicon/*.md
+!SBPQ/vicon/configs/datasets/
+!SBPQ/vicon/configs/datasets/*.yaml
 external_repos/
 
 # SAPQ artifacts (VERY important)

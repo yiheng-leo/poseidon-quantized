@@ -7,6 +7,8 @@ import pickle
 
 
 _MODULES = {
+    "VICON.src.models": "SBPQ.vicon.models",
+    "safe_svd.helper.collector.vicon.vicon_attention": "SBPQ.vicon.attention",
     "quantization.baselines": "quantization.layers",
     "BRECQ.quant.quant_layer": "BRECQ.quantizers",
     "BRECQ.quant.adaptive_rounding": "BRECQ.quantizers",

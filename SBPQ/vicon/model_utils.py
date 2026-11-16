@@ -1,46 +1,10 @@
 """Strict checkpoint loading and hook-visible VICON transformer execution."""
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import os
 from pathlib import Path
-import sys
 
 import torch
 from torch import nn
-
-
-def source_root(value=None):
-    """Find the SafeSVD checkout, which includes its experimental VICON source."""
-    value = value or os.environ.get("SAFE_SVD_ROOT")
-    if value:
-        candidates = [Path(value).expanduser()]
-    else:
-        project = Path(__file__).resolve().parents[2]
-        candidates = [project / "SafeSVD", project.parent / "SafeSVD", project.parent / "SAFE-SVD-v0"]
-    for candidate in candidates:
-        if (candidate / "VICON/src/models.py").is_file() and (candidate / "safe_svd").is_dir():
-            return candidate.resolve()
-    raise FileNotFoundError(
-        "SafeSVD's experimental VICON source is required; pass --safe_svd_root /path/to/SafeSVD "
-        "(containing VICON/ and safe_svd/)."
-    )
-
-
-def configure_source(value):
-    root = source_root(value)
-    # This repository also has an evaluation/ package. Import only VICON and
-    # safe_svd here; the independent evaluator is launched as a separate script.
-    if str(root) not in sys.path:
-        sys.path.append(str(root))
-    for package in ("VICON", "safe_svd"):
-        module = sys.modules.get(package)
-        spec = importlib.util.find_spec(package) if module is None else module.__spec__
-        locations = list(spec.submodule_search_locations or ()) if spec is not None else []
-        if any(not Path(location).resolve().is_relative_to(root) for location in locations):
-            raise ValueError(f"{package} resolves to another checkout; start a fresh process with the selected SafeSVD source")
-    return root
 
 
 class HookableEncoderLayer(nn.TransformerEncoderLayer):
@@ -62,7 +26,7 @@ class HookableEncoderLayer(nn.TransformerEncoderLayer):
 
 
 def expose_attention(model):
-    from safe_svd.helper.collector.vicon.vicon_attention import convert_attn_to_linear
+    from .attention import convert_attn_to_linear
     convert_attn_to_linear(model, verbose=False)
     for module in model.modules():
         if isinstance(module, nn.TransformerEncoderLayer):
@@ -73,12 +37,11 @@ def expose_attention(model):
     return model.eval()
 
 
-def load_model(args, device):
+def load_model(args, device, *, explicit_attention=True):
     from .data_utils import load_config
-    configure_source(args.safe_svd_root)
+    from .models import ICON_CROPPED, ICON_UNCROPPED
     cfg = load_config(args)
-    models = importlib.import_module("VICON.src.models")
-    constructor = models.ICON_CROPPED if cfg.model.type == "crop" else models.ICON_UNCROPPED
+    constructor = ICON_CROPPED if cfg.model.type == "crop" else ICON_UNCROPPED
     checkpoint = Path(args.model_path)
     if not checkpoint.is_file():
         raise FileNotFoundError(f"VICON checkpoint not found: {checkpoint}; pass --ckpt_path")
@@ -86,7 +49,8 @@ def load_model(args, device):
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     state = payload.get("model_state_dict", payload.get("state_dict", payload))
     model.load_state_dict({name.removeprefix("module."): value for name, value in state.items()}, strict=True)
-    return expose_attention(model.to(device))
+    model.to(device).eval()
+    return expose_attention(model) if explicit_attention else model
 
 
 def model_forward(model, batch, device):

@@ -3,7 +3,7 @@
 Poseidon 的 SBPQ 与各个 baseline 使用独立入口，共用完整轨迹校准、模型导出和独立评估接口。
 SBPQ 的默认优化配置来自本次 NSPwC Table 3 复现实验；校准采样改为旧 SAPQ 仓库 ritchie 的完整轨迹协议。
 
-SBPQ 也支持 SafeSVD 的 VICON 实验版本：`python -m SBPQ.sbpq --config configs/sbpq/vicon.json`。
+SBPQ 已内置 SafeSVD 使用的 VICON 模型、校准和评估实现：`python -m SBPQ.sbpq --config configs/sbpq/vicon.json`。
 模型/数据路径、校准对齐与独立评估命令见 [VICON 接入说明](SBPQ/vicon/README.md)。
 
 | 方法 | 量化入口 |

@@ -6,7 +6,7 @@ SBPQ 使用 `python -m SBPQ.sbpq --config configs/sbpq/default.json`，默认参
 详情见 [仓库说明](../README.md)。新入口不从 SBPQ_* 环境变量继承作者实验设置。
 
 `sbpq/vicon.json` 切换为 SafeSVD 的 VICON 模型与校准协议，默认每类 256 个校准样本、batch size 64。
-使用 `--safe_svd_root`、`--ckpt_path`、`--data_root` 指向已有源码、模型和数据，详见 [VICON 说明](../SBPQ/vicon/README.md)。
+模型、数据处理与校准代码已内置于 SBPQ；使用 `--model_path`、`--data_path` 指定已下载的模型和数据，详见 [VICON 说明](../SBPQ/vicon/README.md)。
 
 PPQ 支持 global/layerwise；SAPQ 支持 global/network/block/layerwise，保留旧 ritchie 的 --origin。
 SBPQ 当前只支持 global。raw/normalized 等均为参数，不产生额外入口。

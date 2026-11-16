@@ -1,9 +1,10 @@
 """VICON source parity, real-model gradients, materialization and restart checks."""
 from copy import deepcopy
-import ast
 import json
+import os
 from pathlib import Path
-from types import SimpleNamespace
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -12,20 +13,16 @@ import torch
 from quantization.runner import parse_args, run_quantization, validate_args
 from SBPQ.resume import fingerprint
 from SBPQ.vicon.data_utils import build_calibration_loader, load_config
-from SBPQ.vicon.model_utils import configure_source, load_model, model_forward, source_root
-from SBPQ.vicon.objectives import ViconNetworkLikelihood, query_fields, sensitivity_loss
+from SBPQ.vicon.model_utils import load_model, model_forward
+from SBPQ.vicon.models import ICON_CROPPED
+from SBPQ.vicon.likelihood import ViconNetworkLikelihood
+from SBPQ.vicon.sobolev import query_fields, sensitivity_loss
 
 
 @pytest.fixture
 def vicon_case(tmp_path):
     pytest.importorskip("hydra")
     h5py = pytest.importorskip("h5py")
-    try:
-        root = source_root()
-    except FileNotFoundError:
-        pytest.skip("Set SAFE_SVD_ROOT to run integration checks against the SafeSVD VICON source")
-    configure_source(root)
-    from VICON.src.models import ICON_CROPPED
     previous_threads = torch.get_num_threads()
     torch.set_num_threads(1)
     data = tmp_path / "data"
@@ -49,11 +46,26 @@ def vicon_case(tmp_path):
         order[category] = names if category == "NS2D" else [f"train/{name}" for name in names]
     manifest = tmp_path / "order.json"
     manifest.write_text(json.dumps({"version": 1, "splits": {"train": order}}))
+    # Test files contain the same fields in their own split; generating these
+    # must not change the recorded training-data RNG sequence.
+    for folder in ("2D_Train_Rand", "2D_Train_Turb", "NavierStokes-2D-conditoned"):
+        if folder.startswith("2D_"):
+            source = data / folder / "train/a.h5"
+            target = data / folder / "test/0.h5"
+        else:
+            source = data / folder / "a_train.h5"
+            target = data / folder / "a_test.h5"
+        target.parent.mkdir(exist_ok=True)
+        with h5py.File(source) as original, h5py.File(target, "w") as copied:
+            source_group = original["train"] if "train" in original else original
+            target_group = copied.create_group("test") if folder.startswith("Navier") else copied
+            for field in source_group:
+                target_group[field] = source_group[field][:]
     overrides = ["model.transformer.dim_token=8", "model.transformer.nhead=2",
                  "model.transformer.dim_feedforward=16", "model.transformer.num_layers=2",
                  "model.patch_num_in=2", "model.patch_num_out=2", "model.patch_resolution=2",
                  "model.demo_num=3", "datasets.demo_num=3", "datasets.delta_t_range=[1,2]", "loss.min_ex=1"]
-    argv = ["--model", "vicon", "--safe_svd_root", str(root), "--DEV", "cpu",
+    argv = ["--model", "vicon", "--DEV", "cpu",
             "--ckpt_path", str(tmp_path / "model.pth"), "--data_root", str(data),
             "--vicon_file_order", str(manifest), "--calibration_num", "2", "--batch_size", "2",
             "--total_steps", "4", "--save_every", "1", "--mc_samples", "2"]
@@ -67,47 +79,27 @@ def vicon_case(tmp_path):
     torch.manual_seed(17)
     native = ICON_CROPPED(cfg.model).eval()
     torch.save({"model_state_dict": {"module." + key: value for key, value in native.state_dict().items()}}, args.model_path)
+    reference = json.loads((Path(__file__).parent / "fixtures/vicon_reference.json").read_text())
     try:
-        yield options, native, root
+        yield options, native, reference
     finally:
         torch.set_num_threads(previous_threads)
 
 
-def original_preprocess(root, pairs, cfg):
-    # Execute the actual upstream method in isolation; importing Trainer also
-    # initializes plotting/logging dependencies unnecessary for quantization.
-    module = ast.parse((root / "VICON/src/trainer.py").read_text())
-    trainer = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "Trainer")
-    method = next(node for node in trainer.body if isinstance(node, ast.FunctionDef) and node.name == "_data_preprocess")
-    namespace = {"torch": torch}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), "VICON/src/trainer.py", "exec"), namespace)
-    return namespace["_data_preprocess"](SimpleNamespace(loss_cfg=cfg.loss, model_cfg=cfg.model), pairs)
-
-
 def test_calibration_matches_safesvd_source_and_restarts_exactly(vicon_case):
-    options, _, root = vicon_case
+    options, _, reference = vicon_case
     args = options()
-    cfg = load_config(args)
-    from VICON.src.dataset import all_datasets
-    from safe_svd.helper.collector.vicon.vicon_calibration_dataset import build_calibration_loaders
-    from safe_svd.helper.collector.vicon.vicon_file_order import apply_vicon_file_order
-    datasets = all_datasets(cfg.datasets, 0, cfg.train_seed, "train")
-    apply_vicon_file_order(datasets, args.vicon_file_order)
-    original = build_calibration_loaders(datasets, calibration_num=2, batch_size=2, num_workers=0,
-                                         random_calibration=False, calibration_seed=42)
     loader, metadata = build_calibration_loader(args)
     batches = list(loader)
     assert len(batches) == 3
-    for (category, upstream), batch in zip(original.items(), batches):
-        raw = next(iter(upstream))
-        expected, mean, std = original_preprocess(root, raw[1], cfg)
-        assert batch["category"] == category
-        torch.testing.assert_close(batch["pixel_values"], expected[0], rtol=0, atol=0)
-        torch.testing.assert_close(batch["labels"], expected[1], rtol=0, atol=0)
-        torch.testing.assert_close(batch["channel_mask"], expected[2], rtol=0, atol=0)
-        torch.testing.assert_close(batch["mean"], mean, rtol=0, atol=0)
-        torch.testing.assert_close(batch["std"], std, rtol=0, atol=0)
-        torch.testing.assert_close(batch["time_in"], raw[2], rtol=0, atol=0)
+    for batch in batches:
+        expected = reference["categories"][batch["category"]]
+        for key in ("mean", "std", "channel_mask", "time_in", "time_out", "delta_t"):
+            torch.testing.assert_close(batch[key], torch.tensor(expected[key], dtype=batch[key].dtype))
+        torch.testing.assert_close(batch["pixel_values"][0, 0, :, 1, 1], torch.tensor(expected["initial_probe"]))
+        torch.testing.assert_close(batch["labels"][0, 0, :, 1, 1], torch.tensor(expected["label_probe"]))
+        assert float(batch["pixel_values"].sum()) == pytest.approx(expected["initial_sum"], abs=1e-5)
+        assert float(batch["labels"].sum()) == pytest.approx(expected["label_sum"], abs=1e-5)
     assert fingerprint(list(loader)) == fingerprint(batches)
     assert metadata["num_samples"] == 6
     assert metadata["category_samples"] == {"COMPRESSIBLE2D": 2, "EULER2D": 2, "NS2D": 2}
@@ -116,7 +108,7 @@ def test_calibration_matches_safesvd_source_and_restarts_exactly(vicon_case):
 
 
 def test_strict_checkpoint_attention_parity_and_query_masks(vicon_case):
-    options, native, root = vicon_case
+    options, native, _ = vicon_case
     args = options()
     loader, _ = build_calibration_loader(args)
     batch = next(iter(loader))
@@ -162,21 +154,19 @@ def test_checkpointed_mc_matches_stacked_loss_and_gradients(vicon_case):
     batch = next(iter(loader))
     model = load_model(args, "cpu")
     from SBPQ.vicon.blocks import build_block_mapping
-    from safe_svd.helper.collector.vicon.vicon_fisher_forward import _patched_forward
     _, layers, _, _, _ = build_block_mapping(model)
     for parameter in model.parameters():
         parameter.requires_grad_(False)
-    with _patched_forward(model):
-        with torch.no_grad():
-            clean = query_fields(model_forward(model, batch, "cpu"), batch)
-        likelihood = ViconNetworkLikelihood(model, [batch], [clean], num_mc_samples=3, eta=1e-4, device="cpu")
-        def evaluate(efficient):
-            steps = {name: torch.full((layer.out_features,), 1e-3, requires_grad=True) for name, layer in layers.items()}
-            torch.manual_seed(123)
-            loss = likelihood(steps, 0, memory_efficient=efficient)
-            return loss.detach(), torch.autograd.grad(loss, tuple(steps.values()))
-        a, ga = evaluate(False)
-        b, gb = evaluate(True)
+    with torch.no_grad():
+        clean = query_fields(model_forward(model, batch, "cpu"), batch)
+    likelihood = ViconNetworkLikelihood(model, [batch], [clean], num_mc_samples=3, eta=1e-4, device="cpu")
+    def evaluate(efficient):
+        steps = {name: torch.full((layer.out_features,), 1e-3, requires_grad=True) for name, layer in layers.items()}
+        torch.manual_seed(123)
+        loss = likelihood(steps, 0, memory_efficient=efficient)
+        return loss.detach(), torch.autograd.grad(loss, tuple(steps.values()))
+    a, ga = evaluate(False)
+    b, gb = evaluate(True)
     torch.testing.assert_close(a, b, rtol=0, atol=0)
     for original, checkpointed in zip(ga, gb):
         assert torch.isfinite(checkpointed).all()
@@ -185,7 +175,7 @@ def test_checkpointed_mc_matches_stacked_loss_and_gradients(vicon_case):
 
 
 def test_public_vicon_quantization_export_and_interrupted_resume(vicon_case, tmp_path, monkeypatch):
-    options, native, root = vicon_case
+    options, native, _ = vicon_case
     from SBPQ.trainer import SBPQTrainer
     from quantization.artifacts import load_quantized_artifact
     continuous, meta = run_quantization(options(tmp_path / "continuous"))
@@ -217,22 +207,8 @@ def test_public_vicon_quantization_export_and_interrupted_resume(vicon_case, tmp
     args = options()
     loader, _ = build_calibration_loader(args)
     batch = next(iter(loader))
-    # Exercise SafeSVD's actual checkpoint and attention evaluator modules under
-    # an isolated package name (both repositories have an evaluation package).
-    import importlib.util
-    import importlib
-    import sys
-    spec = importlib.util.spec_from_file_location("_safe_vicon_evaluation", root / "evaluation/vicon/__init__.py",
-                                                 submodule_search_locations=[str(root / "evaluation/vicon")])
-    package = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = package
-    spec.loader.exec_module(package)
-    attention = importlib.import_module("_safe_vicon_evaluation.attention")
-    checkpoints = importlib.import_module("_safe_vicon_evaluation.checkpoints")
-    fp = deepcopy(native)
-    attention.convert_attn_to_linear(fp)
-    attention.disable_transformer_fast_path(fp)
-    checkpoints.load_compressed_state(fp, resumed / "compressed_model.pth")
+    from SBPQ.vicon.checkpoints import load_compressed_state
+    fp = load_compressed_state(load_model(args, "cpu"), resumed / "compressed_model.pth")
     with torch.no_grad():
         torch.testing.assert_close(model_forward(exported, batch, "cpu"), model_forward(fp, batch, "cpu"),
                                    rtol=2e-5, atol=2e-6)
@@ -256,3 +232,105 @@ def test_vicon_config_cli_overrides_and_validation():
                          default_method="sbpq", family="sbpq")
     assert (args.model_type, args.calibration_num, args.batch_size) == ("vicon", 2048, 64)
     assert (args.init_bits, args.mc_samples, args.beta_kappa) == (8, 10, 150)
+    with pytest.raises(SystemExit):
+        parse_args(["--safe_svd_root", "/unused"], default_method="sbpq", family="sbpq")
+
+
+def test_local_network_matches_recorded_safesvd_prediction(vicon_case):
+    options, native, reference = vicon_case
+    loader, _ = build_calibration_loader(options())
+    batch = next(iter(loader))
+    with torch.no_grad():
+        for name, parameter in native.named_parameters():
+            values = torch.linspace(-0.1, 0.1, parameter.numel()).reshape_as(parameter)
+            if "norm" in name and name.endswith("weight"):
+                values += 1
+            parameter.copy_(values)
+        prediction = model_forward(native, batch, "cpu")
+    torch.testing.assert_close(prediction.flatten()[:32], torch.tensor(reference["native_prediction"]["probe"]),
+                               rtol=2e-5, atol=2e-6)
+    assert float(prediction.sum()) == pytest.approx(reference["native_prediction"]["sum"], rel=2e-5, abs=2e-6)
+    from SBPQ.vicon.evaluation import batch_factory, evaluate_model
+    cfg = load_config(options())
+    metrics = evaluate_model(native, batch_factory(cfg, batch_size=2, max_batches=1, protocol="paired"), cfg, "cpu")
+    for category, values in reference["native_metrics"].items():
+        for name, expected in values.items():
+            assert metrics[category][name] == pytest.approx(expected, rel=2e-5, abs=2e-6)
+
+
+def test_independent_local_evaluation_and_sampling_protocols(vicon_case, tmp_path):
+    options, _, _ = vicon_case
+    from SBPQ.vicon.evaluation import batch_factory, main
+    args = options(tmp_path / "quantized", extra=("--total_steps", "1", "--mc_samples", "1"))
+    directory, metadata = run_quantization(args)
+    cfg = load_config(args)
+    paired = batch_factory(cfg, batch_size=2, max_batches=1, protocol="paired")
+    research = batch_factory(cfg, batch_size=2, max_batches=1, protocol="research")
+    def selection(factory):
+        return fingerprint([(category, payload[2], payload[3]) for category, payload in factory()])
+    assert selection(paired) == selection(paired)
+    assert selection(research) != selection(research)
+    output = tmp_path / "evaluation.json"
+    argv = ["--checkpoint", args.model_path, "--model_path", str(directory / "compressed_model.pth"),
+            "--data_path", args.data_path, "--DEV", "cpu", "--batch_size", "2",
+            "--max_batches", "1", "--protocol", "paired", "--output_path", str(output)]
+    for override in args.config_override:
+        argv += ["--config_override", override]
+    result = main(argv)
+    assert json.loads(output.read_text()) == result
+    assert set(result) == {"avg_weight_bits", "metrics"}
+    assert result["avg_weight_bits"] == metadata["quantization"]["avg_weight_bits"]
+    assert set(result["metrics"]) == {"COMPRESSIBLE2D", "EULER2D", "NS2D"}
+    for metrics in result["metrics"].values():
+        assert "base_loss" in metrics and "sobolev" in metrics
+        for values in metrics.values():
+            assert set(values) == {"origin", "compressed", "change_percent"}
+            assert np.isfinite(values["origin"]) and np.isfinite(values["compressed"])
+
+
+def test_public_command_runs_without_any_external_vicon_or_safesvd(vicon_case, tmp_path):
+    options, _, _ = vicon_case
+    args = options()
+    settings = {key: value for key, value in vars(args).items() if not key.startswith("_")}
+    settings.update(save_path=str(tmp_path / "standalone"), total_steps=1, mc_samples=1)
+    settings.pop("config", None)
+    config = tmp_path / "standalone.json"
+    config.write_text(json.dumps(settings))
+    script = '''
+import importlib.abc
+import json
+from pathlib import Path
+import runpy
+import sys
+
+class RejectExternalSources(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'VICON', 'safe_svd'}:
+            raise AssertionError('External source import: ' + fullname)
+
+sys.meta_path.insert(0, RejectExternalSources())
+config = sys.argv[1]
+sys.argv = ['SBPQ.sbpq', '--config', config]
+runpy.run_module('SBPQ.sbpq', run_name='__main__')
+settings = json.loads(Path(config).read_text())
+directory = next(Path(settings['save_path']).glob('*/metadata.json')).parent
+from quantization.artifacts import load_quantized_artifact
+model, metadata = load_quantized_artifact(directory)
+assert all(not module.__class__.__module__.startswith(('VICON', 'safe_svd')) for module in model.modules())
+assert metadata['quantization']['completed_steps'] == 1
+print('VICON_STANDALONE_OK')
+'''
+    completed = subprocess.run([sys.executable, "-c", script, str(config)],
+                               cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60,
+                               env={**os.environ, "SAFE_SVD_ROOT": str(tmp_path / "does-not-exist")})
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "VICON_STANDALONE_OK" in completed.stdout
+
+
+def test_old_artifact_class_names_resolve_locally():
+    import io
+    from quantization import compat
+    from SBPQ.vicon.attention import ExplicitMultiheadAttention
+    loader = compat.Unpickler(io.BytesIO())
+    assert loader.find_class("VICON.src.models", "ICON_CROPPED") is ICON_CROPPED
+    assert loader.find_class("safe_svd.helper.collector.vicon.vicon_attention", "ExplicitMultiheadAttention") is ExplicitMultiheadAttention

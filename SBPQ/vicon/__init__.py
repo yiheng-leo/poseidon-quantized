@@ -1,1 +1,1 @@
-"""SBPQ adapter for the VICON research version distributed with SafeSVD."""
+"""Self-contained VICON model, calibration, quantization and evaluation adapters."""

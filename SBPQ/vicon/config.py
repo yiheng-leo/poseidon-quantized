@@ -2,8 +2,6 @@
 import math
 from pathlib import Path
 
-from .model_utils import source_root
-
 
 def validate_args(args):
     if args.method != "sbpq":
@@ -12,20 +10,19 @@ def validate_args(args):
         raise ValueError("VICON requires calibration_num >= batch_size and nonnegative calibration_seed")
     if not isinstance(args.config_override, list) or not all(isinstance(item, str) for item in args.config_override):
         raise ValueError("VICON config_override must be a list of Hydra override strings")
-    root = source_root(args.safe_svd_root)
-    args.safe_svd_root = str(root)
+    root = Path(__file__).resolve().parents[2]
     args.model_name, args.dataset = "VICON", "vicon"
     if args.model_path is None:
         args.model_path = str(root / "models/VICON/model.pth")
     if args.data_path in (None, "poseidon/camlab-ethz/down_streams"):
-        aligned = root / "data/VICON"
-        args.data_path = str(aligned if aligned.exists() else root / "data/processed_data/2D/CFD/converted")
+        args.data_path = str(root / "dataset/VICON")
     args.model_path = str(Path(args.model_path).expanduser().resolve())
     args.data_path = str(Path(args.data_path).expanduser().resolve())
-    args.config_dir = str(Path(args.config_dir).expanduser().resolve() if args.config_dir else root / "VICON/configs")
+    bundled = Path(__file__).resolve().parent / "configs"
+    args.config_dir = str(Path(args.config_dir).expanduser().resolve() if args.config_dir else bundled)
     if args.vicon_file_order != "filesystem":
         args.vicon_file_order = str(Path(args.vicon_file_order).expanduser().resolve() if args.vicon_file_order
-                                    else root / "VICON/configs/research_calibration_order.json")
+                                    else bundled / "research_calibration_order.json")
 
 
 def validate_settings(args):

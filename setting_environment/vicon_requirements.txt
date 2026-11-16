@@ -1,10 +1,2 @@
-# Use a torchvision build compatible with the installed CPU/CUDA PyTorch.
 -r quantization_requirements.txt
-torchvision
 hydra-core>=1.3,<1.4
-# Required by SafeSVD's independent VICON evaluator (the quantizer avoids Trainer initialization).
-absl-py
-tabulate
-torchinfo
-wandb
-pytz

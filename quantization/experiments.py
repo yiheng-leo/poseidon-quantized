@@ -17,6 +17,11 @@ def effective_settings(args):
     values = {key: value for key, value in vars(args).items()
               if key not in _OPERATIONAL and not key.startswith('_')}
     values.pop('variant', None)  # method already resolves the variant uniquely.
+    if values.get('model_type', 'poseidon') == 'poseidon':
+        # New model-routing options do not invalidate existing Poseidon resumes.
+        for key in ('model_type', 'safe_svd_root', 'calibration_num', 'config_dir', 'config_name',
+                    'config_override', 'vicon_file_order'):
+            values.pop(key, None)
     for key in ('model_path', 'data_path'):
         if values.get(key):
             values[key] = str(Path(values[key]).expanduser().resolve())
@@ -40,6 +45,9 @@ def run_name(args):
     common = (f'traj{args.traj_num}_{"rnd" if args.random_calibration == "y" else "fix"}'
               f'_cs{args.calibration_seed}_ft{args.final_time}_tb{args.time_back}'
               f'_bs{args.batch_size}_s{args.seed}')
+    if getattr(args, 'model_type', 'poseidon') == 'vicon':
+        common = (f'vicon_cali{args.calibration_num}_cs{args.calibration_seed}'
+                  f'_bs{args.batch_size}_nw{args.num_workers}_{args.random_calibration}_s{args.seed}')
     if args.method == 'sbpq':
         parameters = (f'i{args.init_bits}_t{token(args.target_bits)}_k{token(args.beta_kappa)}'
                       f'_d{token(args.delta_bits)}_mc{args.mc_samples}_eta{token(args.eta)}'

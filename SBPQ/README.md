@@ -5,6 +5,9 @@
 新入口只执行压缩；默认使用完整轨迹校准，最终导出不需要 hooks 的 compressed_model.pt。
 新入口的 save_path 是自动参数子目录的父目录，并记录纯优化与资源成本；详见 [成本与恢复](../docs/costs_and_resume.md)。
 
+VICON 已接入相同正式入口，使用 `--config configs/sbpq/vicon.json --safe_svd_root /path/to/SafeSVD`。
+校准复用 SafeSVD 的 VICON 加载器；完整启动、校准对齐及原 evaluator 命令见 [VICON 说明](vicon/README.md)。
+
 下文描述保留的作者入口 `python -u run_sbpq_poseidon.py`，它继续使用原始采样/缓存/验证协议和 SBPQ_* 环境变量，
 保存路径不等同于新入口的 save_path。该入口默认优化参数也已更新为本次 NSPwC 实验值。
 

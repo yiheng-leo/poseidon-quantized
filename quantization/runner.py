@@ -50,6 +50,13 @@ def build_parser(default_method=None, defaults=None, *, family=None):
         parser.add_argument("--origin_root", help="Original repository/cache root; defaults to this checkout.")
         for option in ("frozen_batches", "sensitivity", "ranges", "initial_steps", "layers"):
             parser.add_argument(f"--origin_{option}", help=f"Explicit original {option} file.")
+    parser.add_argument("--model", "--model_type", dest="model_type", choices=("poseidon", "vicon"), default="poseidon")
+    parser.add_argument("--safe_svd_root", help="SafeSVD checkout containing its experimental VICON/ source.")
+    parser.add_argument("--calibration_num", type=int, default=256, help="VICON calibration samples per category.")
+    parser.add_argument("--config_dir", help="VICON Hydra configuration directory.")
+    parser.add_argument("--config_name", default="default", help="VICON Hydra configuration name.")
+    parser.add_argument("--config_override", action="append", default=[], help="Repeatable VICON Hydra KEY=VALUE override.")
+    parser.add_argument("--vicon_file_order", help="SafeSVD file-order manifest, or filesystem; defaults to the bundled manifest.")
     parser.add_argument("--model_name", default="Poseidon-L")
     parser.add_argument("--dataset", default=os.environ.get(
         "PPQ_DATASET_NAME", "fluids.incompressible.PiecewiseConstants"))
@@ -60,14 +67,14 @@ def build_parser(default_method=None, defaults=None, *, family=None):
     parser.add_argument("--time_back", type=int, default=0)
     parser.add_argument("--use_phyloss", default="no_phyloss")
     parser.add_argument("--DEV", default="cuda")
-    parser.add_argument("--model_path", default=os.environ.get("PPQ_MODEL_PATH"))
-    parser.add_argument("--data_path", default=os.environ.get(
+    parser.add_argument("--model_path", "--ckpt_path", default=os.environ.get("PPQ_MODEL_PATH"))
+    parser.add_argument("--data_path", "--data_root", default=os.environ.get(
         "PPQ_DATA_PATH", "poseidon/camlab-ethz/down_streams"))
     parser.add_argument("--save_path", help="Output parent for SBPQ/PPQ/BRECQ; parameter-named child is automatic.")
     parser.add_argument("--output_root", help="Alias for the output parent of parameter-named experiments.")
     parser.add_argument("--batch_size", type=int, default=2,
                         help="Memory batch size; every selected trajectory/time pair is consumed.")
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--num_workers", "--dataset_workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0, help="Quantization RNG seed (independent of trajectory selection).")
     parser.add_argument("--weight_bits", type=int, default=8)
     parser.add_argument("--activation_bits", type=int, default=None,
@@ -124,6 +131,9 @@ def build_parser(default_method=None, defaults=None, *, family=None):
 
 
 def validate_args(args):
+    if getattr(args, "model_type", "poseidon") == "vicon":
+        from SBPQ.vicon.config import validate_args as validate_vicon
+        validate_vicon(args)
     if getattr(args, "origin", False):
         from SAPQ.origin import apply_defaults
         apply_defaults(args)
@@ -132,7 +142,10 @@ def validate_args(args):
     if args.save_every < 1 or args.profile_interval <= 0 or args.reconstruction_lr <= 0:
         raise ValueError("save_every, profile_interval and reconstruction_lr must be positive")
     if args.method == "sbpq":
-        from SBPQ.quantize import validate_settings
+        if args.model_type == "vicon":
+            from SBPQ.vicon.config import validate_settings
+        else:
+            from SBPQ.quantize import validate_settings
         validate_settings(args)
     if args.activation_bits is None:
         args.activation_bits = 8 if args.method == "repq" else 32
@@ -251,7 +264,7 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
         if args.overwrite and not args.resume:
             for name in ('work', 'checkpoints'):
                 shutil.rmtree(destination / name, ignore_errors=True)
-            for name in ('metadata.json', 'compressed_model.pt', 'quantization_state.pt',
+            for name in ('metadata.json', 'compressed_model.pt', 'compressed_model.pth', 'quantization_state.pt',
                          'history.json', 'sbpq_checkpoint.pt', 'brecq_checkpoint.pt', 'ppq_checkpoint.pt',
                          'sbpq_trainer_state.pt', 'sbpq_preparation.pt', 'sbpq_beta_parameters.pt'):
                 (destination / name).unlink(missing_ok=True)
@@ -284,7 +297,10 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
             with phase('calibration_loading'):
                 if calibration_loader is None and needs_calibration:
                     progress_write('Preparing calibration dataset...')
-                    if getattr(args, 'origin', False):
+                    if args.model_type == 'vicon':
+                        from SBPQ.vicon.data_utils import build_calibration_loader as build_vicon_loader
+                        calibration_loader, calibration_metadata = build_vicon_loader(args)
+                    elif getattr(args, 'origin', False):
                         from SAPQ.origin import build_calibration_loader as build_origin_loader
                         _, calibration_loader, calibration_metadata = build_origin_loader(args)
                     else:
@@ -298,7 +314,11 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
             with phase('model_loading'):
                 if model is None:
                     progress_write(f'Loading full-precision model: {args.model_path}')
-                    model = _load_model(args.model_path, device)
+                    if args.model_type == 'vicon':
+                        from SBPQ.vicon.model_utils import load_model as load_vicon_model
+                        model = load_vicon_model(args, device)
+                    else:
+                        model = _load_model(args.model_path, device)
                 model.to(device).eval()
                 for parameter in model.parameters():
                     parameter.requires_grad_(False)
@@ -314,7 +334,8 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
                     'quantized_layers': [], 'calibration_samples': 0, 'calibration_batches': 0,
                 })
             else:
-                implementation = importlib.import_module(METHOD_MODULES[args.method])
+                module_name = 'SBPQ.vicon.quantize' if args.model_type == 'vicon' else METHOD_MODULES[args.method]
+                implementation = importlib.import_module(module_name)
                 result = implementation.quantize(model, calibration_loader, args, device, work_dir)
             metadata = {
                 'method': args.method, 'created_at_utc': datetime.now(timezone.utc).isoformat(),
@@ -328,8 +349,10 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
             with phase('artifact_saving'):
                 metadata = save_quantized_artifact(result, destination, metadata,
                                                   overwrite=args.overwrite or bool(args.resume))
-                counter('artifact_bytes_written', sum((destination / name).stat().st_size for name in
-                                                      ('compressed_model.pt', 'quantization_state.pt', 'metadata.json')))
+                artifact_files = ['compressed_model.pt', 'quantization_state.pt', 'metadata.json']
+                if metadata.get('state_dict_file'):
+                    artifact_files.append(metadata['state_dict_file'])
+                counter('artifact_bytes_written', sum((destination / name).stat().st_size for name in artifact_files))
             if not args.keep_work_dir:
                 with phase('cache_cleanup'):
                     try:
@@ -353,11 +376,21 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     atomic_json(metadata, destination / 'metadata.json')
     print(f"Recorded optimization time: {metadata['costs_summary']['optimization_seconds']:.3f}s; costs: {destination / 'costs.json'}", flush=True)
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
-    evaluation_time = (15 if args.dataset == 'wave.Gaussians' else 20) if getattr(args, 'origin', False) else args.final_time
-    print('Evaluate separately with: ' + shlex.join([
-        'python', '-m', 'evaluation.evaluate', '--model_path', str(destination),
-        '--dataset', args.dataset, '--data_path', str(args.data_path),
-        '--final_time', str(evaluation_time), '--DEV', args.DEV]), flush=True)
+    if args.model_type == 'vicon':
+        command = ['python', str(Path(args.safe_svd_root) / 'evaluation/vicon/evaluate.py'),
+                   '--vicon-root', str(Path(args.safe_svd_root) / 'VICON'), '--checkpoint', str(args.model_path),
+                   '--data-root', str(args.data_path), '--model', str(destination / 'compressed_model.pth'),
+                   '--config-dir', args.config_dir, '--config-name', args.config_name,
+                   '--batch-size', str(args.batch_size), '--device', args.DEV,
+                   '--output', str(destination / 'evaluation.json')]
+        for override in args.config_override:
+            command += ['--config-override', override]
+    else:
+        evaluation_time = (15 if args.dataset == 'wave.Gaussians' else 20) if getattr(args, 'origin', False) else args.final_time
+        command = ['python', '-m', 'evaluation.evaluate', '--model_path', str(destination),
+                   '--dataset', args.dataset, '--data_path', str(args.data_path),
+                   '--final_time', str(evaluation_time), '--DEV', args.DEV]
+    print('Evaluate separately with: ' + shlex.join(command), flush=True)
     return destination, metadata
 
 
@@ -370,6 +403,7 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
     config_parser.add_argument("--variant")
     config_parser.add_argument("--origin", action="store_true")
     config_parser.add_argument("--resume")
+    config_parser.add_argument("--model", "--model_type", dest="model_type")
     explicit = config_parser.parse_known_args(argv)[0]
     config_path = explicit.config
     saved_defaults = {}
@@ -377,9 +411,12 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
         from .experiments import resume_defaults
         saved_defaults = resume_defaults(explicit.resume, explicit.method or default_method)
     configured_method = saved_defaults.get('method')
+    configured_model = saved_defaults.get('model_type')
     if config_path:
         try:
-            configured_method = json.loads(Path(config_path).read_text(encoding="utf-8")).get("method")
+            configured = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            configured_method = configured.get("method")
+            configured_model = configured.get("model_type")
         except (OSError, ValueError, AttributeError):
             pass  # The normal config parser below provides the detailed error.
     if (explicit.method or configured_method or default_method) == "sbpq":
@@ -387,6 +424,8 @@ def parse_args(argv=None, *, default_method=None, defaults=None, family=None):
         parser.set_defaults(**{**DEFAULTS, **(defaults or {})})
     elif (explicit.method or configured_method or default_method) == "brecq":
         parser.set_defaults(save_every=1000)
+    if (explicit.model_type or configured_model) == 'vicon':
+        parser.set_defaults(model_name='VICON', dataset='vicon', batch_size=64, model_path=None, data_path=None)
     if saved_defaults:
         actions = {action.dest: action for action in parser._actions}
         parser.set_defaults(**{key: value for key, value in saved_defaults.items() if key in actions})

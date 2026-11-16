@@ -34,7 +34,6 @@ from SBPQ.storage import DiskSequence
 from SBPQ.beta_prior import BlockwiseBetaPrior
 from SBPQ.step_sizes import LearnableStepSizes
 from SBPQ.resume import atomic_save, fingerprint, rng_state, restore_rng
-from SBPQ.poseidon.likelihood import PoseidonNetworkLikelihood
 
 
 def extract_weight_ranges(
@@ -151,6 +150,7 @@ class SBPQTrainer:
         gradient_clip_norm: float | None = None,
         channel_weights: Mapping[str, torch.Tensor] | None = None,
         device: str | torch.device = "cuda",
+        likelihood_factory=None,
     ) -> None:
         """
         Initialize the SBPQ trainer.
@@ -219,6 +219,10 @@ class SBPQTrainer:
 
             device:
                 Optimization device.
+
+            likelihood_factory:
+                Optional model-specific likelihood constructor with the same
+                model/batch/output/MC/eta interface. Defaults to Poseidon.
         """
         if len(frozen_batches) == 0:
             raise ValueError(
@@ -357,7 +361,10 @@ class SBPQTrainer:
         # -----------------------------------------------------
         # 3. Create network-wise Monte Carlo likelihood
         # -----------------------------------------------------
-        self.likelihood = PoseidonNetworkLikelihood(
+        if likelihood_factory is None:
+            from SBPQ.poseidon.likelihood import PoseidonNetworkLikelihood
+            likelihood_factory = PoseidonNetworkLikelihood
+        self.likelihood = likelihood_factory(
             model=self.model,
             frozen_batches=self.frozen_batches,
             clean_network_outputs=self.clean_network_outputs,
@@ -405,6 +412,10 @@ class SBPQTrainer:
             "beta_boundary_epsilon": beta_boundary_epsilon, "beta_reduction": beta_reduction,
             "channel_weights": fingerprint(self.channel_weights),
         }
+        if likelihood_factory.__module__ != "SBPQ.poseidon.likelihood":
+            self.training_signature["likelihood_implementation"] = (
+                f"{likelihood_factory.__module__}.{likelihood_factory.__qualname__}"
+            )
 
         print(
             f"[INFO] SBPQ trainer initialized with "

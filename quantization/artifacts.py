@@ -61,21 +61,32 @@ def save_quantized_artifact(result: QuantizationResult, path, metadata, *, overw
     model_file = path / "compressed_model.pt"
     if model_file.exists() and not overwrite:
         raise FileExistsError(f"Artifact already exists: {model_file}; use a new --save_path or --overwrite.")
-    with progress(total=3, desc="Save quantization artifact", unit="file") as files:
+    is_vicon = result.metadata.get("model_family") == "vicon"
+    with progress(total=4 if is_vicon else 3, desc="Save quantization artifact", unit="file") as files:
         files.set_postfix(file=model_file.name, refresh=False)
         result.model.eval().cpu()
         _atomic_save(result.model, model_file)
         files.update()
+        state_export = {}
+        if is_vicon:
+            # SafeSVD's evaluator consumes a state dict with explicit Q/K/V
+            # projection names. It can load these full-rank quantized weights
+            # without any rank topology or SBPQ-specific inference hooks.
+            state_file = path / "compressed_model.pth"
+            _atomic_save(result.model.state_dict(), state_file)
+            state_export = {"state_dict_file": state_file.name, "state_dict_sha256": _sha256(state_file)}
+            files.update()
         files.set_postfix(file="quantization_state.pt", refresh=False)
         _atomic_save(result.state, path / "quantization_state.pt")
         files.update()
         combined = {
             **metadata,
             "schema_version": 1,
-            "artifact_type": "poseidon_quantization",
+            "artifact_type": "vicon_quantization" if is_vicon else "poseidon_quantization",
             "model_file": model_file.name,
             "model_sha256": _sha256(model_file, show_progress=True),
             "quantization": result.metadata,
+            **state_export,
         }
         files.set_postfix(file="metadata.json", refresh=False)
         _atomic_save(combined, path / "metadata.json", json_file=True)
@@ -94,6 +105,9 @@ def load_quantized_artifact(path, device="cpu"):
         expected = metadata.get("model_sha256")
         if expected is not None and _sha256(model_file) != expected:
             raise ValueError(f"Artifact checksum does not match metadata: {model_file}")
+        if metadata.get("artifact_type") == "vicon_quantization":
+            from SBPQ.vicon.model_utils import configure_source
+            configure_source(metadata.get("settings", {}).get("safe_svd_root"))
     # Full module serialization deliberately follows MySVD. Load only trusted files.
     model = torch.load(model_file, map_location="cpu", weights_only=False, pickle_module=compat)
     if not isinstance(model, nn.Module):

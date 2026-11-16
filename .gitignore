@@ -87,6 +87,9 @@ setting_environment/Miniconda3-latest-Linux-aarch64.sh
 # Nested repos
 PDEBench/
 VICON/
+!SBPQ/vicon/
+!SBPQ/vicon/*.py
+!SBPQ/vicon/*.md
 external_repos/
 
 # SAPQ artifacts (VERY important)

@@ -20,8 +20,12 @@ SBPQ 已内置 SafeSVD 使用的 VICON 模型、校准和评估实现：`python 
 
 在仓库根目录执行；显式命令行参数覆盖 JSON 配置。新入口使用 CLI/JSON 设置 SBPQ，不读取旧的 `SBPQ_*` 实验环境变量。
 
+迁移环境使用 **Python 3.11** 和根目录 [requirements.txt](requirements.txt)，核心版本依据当前服务器的
+`poseidon-quant` 环境锁定；CUDA 驱动／Toolkit 单独配置。安装、CPU/GPU 检查与旧断点兼容说明见
+[环境迁移说明](docs/environment_migration.md)。
+
 ```bash
-python -m pip install -r setting_environment/quantization_requirements.txt
+python -m pip install -r requirements.txt
 
 python -u -m SBPQ.sbpq --config configs/sbpq/default.json \
   --model_path /path/to/poseidon/fluids.incompressible.PiecewiseConstants \

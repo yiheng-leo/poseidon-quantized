@@ -1,8 +1,8 @@
 # Poseidon 实验操作与进度
 
-历史状态核查：2026-11-19 11:14（Asia/Shanghai；跨主机扫描时间及覆盖范围见“正在运行的任务”）。
+最近状态核查：2026-11-19 15:48（Asia/Shanghai；跨主机进程实查至 15:43，队列心跳与源码复查至 15:48，覆盖范围见“正在运行的任务”）。
 
-实验设置更新：2026-11-19。完整配置及待实施的对齐、提速建议见 [PoseidonExpSetting.md](PoseidonExpSetting.md)；新协议标记为 `sbpq-led-v2`。本次修改设置与文档，没有启动新实验，历史进程快照不作为新的实时检查。
+实验设置更新：2026-11-19。完整配置及待实施的对齐、提速建议见 [PoseidonExpSetting.md](PoseidonExpSetting.md)；新协议标记为 `sbpq-led-v2`。已按用户指令登记共享等待队列：63 项正式实验、18 项 PPQ 初始扫描，共 81 项；其中 78 项新入队，3 项为已在跑的 NS-PwC 8-bit sweep。7 台服务器上的等待进程均已核验存活；当前 69 项等待 GPU、9 项等待 gamma、3 项实际量化中，详见第 5.1、5.2、7 节。
 
 本文供后续 agents 查看实验进度、连接服务器、启动量化及补做评估。主实验表的 **PPQ 已由用户确认统一采用 layerwise**。所有状态以服务器文件和实际进程为依据，启动或结束实验后应更新本文。
 
@@ -119,6 +119,8 @@ SBPQ/PPQ 的 B 使用 `target_bits`；Uniform/BRECQ 使用 `weight_bits`。**目
 | ✅ 已完成 | 量化模型和评估 JSON 均已存在 | 完成状态／元数据、`compressed_model.pt`、结果 JSON |
 | 🟨 待评估 | 模型已完成，尚未发现对应评估 JSON | 模型存在，评估文件不存在；不是“训练中” |
 | 🔵 量化中／评估中 | 确认有对应的实际进程 | 记录主机、GPU、tmux、PID、日志和检查时间 |
+| ⏳ 已入队／等待 GPU | 任务已登记且有存活的等待进程，尚未领取／启动 | 共享队列 `plan.json`、`states/`、`workers/`、PID 和 tmux；不记成量化中 |
+| ⏳ 等待 gamma | PPQ 正式任务已登记，待本数据集的 gamma 匹配后释放 | `states/` 为 `waiting_gamma`，对应 `selections/` 尚未选定 |
 | ⬜ 未做 | 共享目录未发现该配置的启动记录、模型或结果 | 启动前还需复核已有任务登记 |
 | ⏸ 中断／失败 | 已启动但进程已结束，存在未完成状态 | 核对 `run_state.json`、checkpoint 和日志后决定 resume |
 | ❔ 待核实 | 主机不可访问或文件与进程证据不一致 | 不直接当作空闲或完成 |
@@ -128,7 +130,7 @@ SBPQ/PPQ 的 B 使用 `target_bits`；Uniform/BRECQ 使用 `weight_bits`。**目
 ## 5. 主实验表：训练与校准三组配对（v2）
 
 共 **4 位宽 × 4 方法 × 3 组配对 × 3 数据集 = 144 个实验格**。PPQ 全部指 **layerwise、MC=10、init_bits=8、每层 5 epochs**。
-新协议尚未在本文登记启动，先标为未做；历史 default 结果见下一节。启动前复查共享目录及实际进程，再更新状态。
+下表 63 个正式实验格已入第 5.2 节的共享等待队列，其余保留未做；入队不代表已启动或已完成。PPQ 8-bit 的 9 格等待各数据集的 gamma。第 5.1 节的 tuning 运行不计入正式完成格。
 NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq-gamma-sweep)，为 2、3、4、8 bits 分别选定 gamma。
 
 | 配置位宽 | 方法 | 训练 seed | 校准组 | NS-PwC | CE-RM | Wave-Gauss |
@@ -142,9 +144,9 @@ NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq
 | 2 bits | BRECQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 2 bits | BRECQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 2 bits | BRECQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 2 bits | SBPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 2 bits | SBPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 2 bits | SBPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
+| 2 bits | SBPQ | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 2 bits | SBPQ | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 2 bits | SBPQ | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
 | 3 bits | Uniform | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 3 bits | Uniform | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 3 bits | Uniform | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
@@ -154,9 +156,9 @@ NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq
 | 3 bits | BRECQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 3 bits | BRECQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 3 bits | BRECQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 3 bits | SBPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 3 bits | SBPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 3 bits | SBPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
+| 3 bits | SBPQ | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 3 bits | SBPQ | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 3 bits | SBPQ | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
 | 4 bits | Uniform | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 4 bits | Uniform | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 4 bits | Uniform | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
@@ -166,36 +168,38 @@ NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq
 | 4 bits | BRECQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 4 bits | BRECQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 4 bits | BRECQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 4 bits | SBPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 4 bits | SBPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 4 bits | SBPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | Uniform | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | Uniform | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | Uniform | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | PPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | PPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | PPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | BRECQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | BRECQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | BRECQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | SBPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | SBPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
-| 8 bits | SBPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
+| 4 bits | SBPQ | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 4 bits | SBPQ | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 4 bits | SBPQ | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | Uniform | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | Uniform | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | Uniform | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | PPQ | 1 | default（n） | ⏳ 等待 gamma | ⏳ 等待 gamma | ⏳ 等待 gamma |
+| 8 bits | PPQ | 7 | seed7（y） | ⏳ 等待 gamma | ⏳ 等待 gamma | ⏳ 等待 gamma |
+| 8 bits | PPQ | 42 | seed42（y） | ⏳ 等待 gamma | ⏳ 等待 gamma | ⏳ 等待 gamma |
+| 8 bits | BRECQ | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | BRECQ | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | BRECQ | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | SBPQ | 1 | default（n） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | SBPQ | 7 | seed7（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
+| 8 bits | SBPQ | 42 | seed42（y） | ⏳ 已入队 | ⏳ 已入队 | ⏳ 已入队 |
 
 <a id="nspwc-ppq-gamma-sweep"></a>
 
-### 5.1 待做：NS-PwC 的 PPQ layerwise gamma sweep
+### 5.1 NS-PwC 的 PPQ layerwise gamma sweep
 
-登记日期：2026-11-19。**状态：⬜ 待做；本次仅登记计划，尚未启动 sweep。** 实验对象为 NS-PwC（`fluids.incompressible.PiecewiseConstants`），目标平均位宽为 2、3、4、8 bits。
+登记日期：2026-11-19。**状态：🔵 8-bit 首轮三个候选均已实际启动；2/3/4-bit 的九个首轮候选均已入共享等待队列。** 用户已明确低位宽 PPQ sweep 仅做 NS-PwC（`fluids.incompressible.PiecewiseConstants`）；本节目标平均位宽为 2、3、4、8 bits。
 
 依据用户报告的约 3.7 avg bits、gamma 暂按默认 `0.005`，设置以下首轮搜索点。该参照运行的有效配置和最终位宽仍需核对；表中 gamma 是待验证的初始范围，选定 gamma 和实测结果尚未产生。
 
+2026-11-19 本次复核：共享目录内已完成的旧 layerwise 为 `2.237409993` bits，旧 global 为 `3.548605535` bits；均为 gamma `0.005`、seed42、init9、MC5、21 epochs。尚未定位到用户报告约 3.7 bits 的同配置参照，两个旧结果均未复用到本轮 sweep。
+
 | 目标平均位宽 B | 首轮 gamma 候选 | 粗扫状态 | 细扫状态 | 选定 gamma | 选定运行的实际 avg bits |
 | --- | --- | --- | --- | --- | --- |
-| 2 bits | `2.5e-2`、`5e-2`、`1e-1` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
-| 3 bits | `7.5e-3`、`1.25e-2`、`2e-2` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
-| 4 bits | `2e-3`、`3e-3`、`5e-3` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
-| 8 bits | `3e-6`、`1e-5`、`3e-5` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
+| 2 bits | `2.5e-2`、`5e-2`、`1e-1` | ⏳ 三个候选已入队 | ⏳ 粗扫后按需自动补点 | 待定 | 待记录 |
+| 3 bits | `7.5e-3`、`1.25e-2`、`2e-2` | ⏳ 三个候选已入队 | ⏳ 粗扫后按需自动补点 | 待定 | 待记录 |
+| 4 bits | `2e-3`、`3e-3`、`5e-3` | ⏳ 三个候选已入队 | ⏳ 粗扫后按需自动补点 | 待定 | 待记录 |
+| 8 bits | `3e-6`、`1e-5`、`3e-5` | 🔵 三个候选量化中 | ⏳ 粗扫后按需自动补点 | 待定 | 待记录 |
 
 固定设置：原模型与数据路径沿用第 3 节；训练 `seed=1`、`random_calibration=n`（default；`calibration_seed=42` 仅占位），`traj_num=16`、`final_time=10`、`time_back=0`、`batch_size=2`、`num_workers=0`、`activation_bits=32`；PPQ 使用 `init_bits=8`、`mc_samples=10`、每层 `epochs=5`、`learning_rate=9.1e-4`、`eta=1e-6`、`percentile=1e-4`、`save_every=1000`。同一个 B 内只改变 gamma；`target_bits=B` 作为该组实验的配置标签，不会自动把实际平均位宽拉到 B。
 
@@ -223,6 +227,109 @@ NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq
 ```
 
 定位 gamma 以模型元数据中的最终参数量加权 `avg_weight_bits` 为依据，不需要对所有候选都做完整测试集评估。若在满足位宽预算的候选间按误差择优，使用校准／验证数据；正式 gamma 确定后再做统一测试评估。正式输出仍使用第 2 节的标准短路径，tuning 产物保留来源记录。
+
+#### 5.1.1 8-bit 首轮启动记录（2026-11-19）
+
+本节记录最先启动的三个 8-bit gamma，固定训练 seed1/default，配置与本节一致；尚无最终模型位宽、选定 gamma 或测试评估。三个实际进程均已核验，配置与源码一致；校准为 **533 个 Linear、528 个校准 batch、1056 个样本**，完整预算为 1,407,120 次优化更新。下表层数与 updates 为 15:43 快照；15:48 队列复查仍为三个既有运行。后续新增队列见第 5.2 节。
+
+| gamma | 当前状态 | 主机 / GPU | tmux | 量化 PID | 监督 PID | 启动／排队时间（Asia/Shanghai） |
+| --- | --- | --- | --- | --- | --- | --- |
+| `3e-6` | 🔵 量化中；已保存历史完成 31/533 层，成本计数 81840 updates | dory / 0 | `poseidon-nspwc-ppq-bit8-g3e-6` | 882559 | 882521 | 15:07:05 |
+| `1e-5` | 🔵 量化中；已保存历史完成 21/533 层，成本计数 55440 updates | albacore / 0 | `poseidon-nspwc-ppq-bit8-g1e-5` | 1534082 | 1532884 | 15:10:01 排队，15:14:01 自动启动 |
+| `3e-5` | 🔵 量化中；已保存历史完成 21/533 层，成本计数 55440 updates | shark / 0 | `poseidon-nspwc-ppq-bit8-g3e-5` | 3398846 | 3398805 | 15:07:46 |
+
+三个主机均为 NVIDIA GeForce RTX 4070 Ti SUPER（16376 MiB）。GPU UUID 分别为 dory `GPU-1b56f0c6-7954-f002-25cc-a299dcd240b9`、albacore `GPU-fef16809-0629-84cd-b499-be1d7635a42f`、shark `GPU-d036df2f-28f4-973f-7605-ff61bdc917e1`；显式按 UUID 绑定设备。三个主机上的正式环境均通过 CUDA Adam 检查；已启动 checkpoint 记录 PyTorch `2.15.0+cu132`、matmul precision `highest`，运行时探测 CUDA build `13.2`、matmul TF32=false、cuDNN TF32=true。
+
+源码提交：`27dca632801f9b094e29b9ea1e34fe35a6d9b941`。量化实现未修改；增加了操作层监督脚本 [scripts/run_ppq_nspwc_bit8_gamma.py](scripts/run_ppq_nspwc_bit8_gamma.py)。脚本持有每个候选的独占锁，保存完整命令、源码／脚本哈希、设备和 PID；训练仍调用现有 `PPQ.ppq` 入口。监督脚本仅在已保存历史中确认后续层也完成 epoch5 后，清理更早完成层的可重建 IO 缓存；保留校准、当前层、最近完成层及 checkpoint，清理记录写入 `*.supervisor.json`。此清理在训练进程外执行，耗时不计入 PPQ 的 `costs.json`。
+
+albacore 在全主机扫描时空闲，但 15:07:29 启动前被其他任务占用（4455 MiB）；首个监督进程在创建实验前主动退出。15:10:01 在原 tmux 中设置 `--wait_for_idle`，每 30 秒查询一次显存，等待期间不分配 CUDA 内存。**15:14:01 GPU 空闲后已自动启动**，量化 PID 为 1534082，`*.queue.json` 已更新为 `started`；15:43 复查确认量化进程存活。共享队列只登记这三个既有运行，不重复启动或中断它们。
+
+令 `G` 为 `3e-6`、`1e-5` 或 `3e-5`；每个候选的精确路径为：
+
+```text
+模型目录：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/quantization_artifacts/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma<G>/
+
+量化日志：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma<G>.log
+
+启动清单／运行监督／等待记录：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma<G>.launch.json
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma<G>.supervisor.json
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma1e-5.queue.json
+```
+
+成本与完成依据仍读取各模型目录的 `costs.json`、`run_state.json`、`metadata.json` 和 `compressed_model.pt`；最终平均位宽位于 `metadata.json` 的 `quantization.avg_weight_bits`。当前代码的 `run_state.json` 在逐层优化期间仍可能显示 `preparing`，需结合实际进程、`costs.json` 中的 optimization 计数及 checkpoint cursor 判断阶段。日志中的阶段性全模型平均位宽不能当作最终结果。
+
+查看运行示例：
+
+```bash
+ssh dory
+tmux attach-session -t poseidon-nspwc-ppq-bit8-g3e-6
+# 监督窗口显示启动清单；逐步训练进度读取独立日志：
+tail -f /cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma3e-6.log
+```
+
+截至核查时间，尚未启动完整测试集评估，也没有正式主表完成格。共享队列会在粗扫全部完成后读取最终位宽，按 `7.9 <= avg_weight_bits <= 8` 选定 gamma；未命中时按上面的夹逼与几何中点规则继续扩展／细扫，再释放正式 PPQ 任务。
+
+### 5.2 共享等待队列（2026-11-19）
+
+用户指令范围：**8-bit 全部正式实验；2/3/4-bit 的 SBPQ 三组 seeds；2/3/4-bit 的 PPQ sweep 仅 NS-PwC**。正式实验覆盖三个数据集，严格使用 1/default、7/seed7、42/seed42 配对；2/3/4-bit 的 PPQ、Uniform、BRECQ 正式实验未入本次队列。
+
+| 任务组 | 范围 | 初始任务数 | 核查状态 |
+| --- | --- | --- | --- |
+| 8-bit 正式实验 | 4 方法 × 3 seeds × 3 数据集 | 36 | 27 项等待 GPU；9 项 PPQ 等待各数据集 gamma |
+| 2/3/4-bit SBPQ | 3 位宽 × 3 seeds × 3 数据集 | 27 | 等待 GPU |
+| 2/3/4-bit PPQ 粗扫 | 仅 NS-PwC；每个位宽 3 个 gamma | 9 | 等待 GPU |
+| 8-bit PPQ 前置粗扫 | CE-RM、Wave-Gauss 各 3 个 gamma | 6 | 等待 GPU |
+| 已有 8-bit PPQ 粗扫 | NS-PwC 的三个既有运行 | 3 | 原进程量化中，队列只跟踪结果 |
+| 合计 | 新增 78 项，登记既有 3 项 | **81** | **69 queued、9 waiting_gamma、3 external_running** |
+
+每项正式任务依次执行量化和独立评估，故另有 **63 条评估命令**随任务串接，不单独计入上述 81 项。评估统一采用 `safe-svd`、test、`final_time=10`、`eval_obj=ongt`、`batch_size=8`、`physics_batch_size=10`、`num_workers=0`，显式指定 v2 的输出路径；实际命令和评估协议均落盘。扫描候选只训练和记录最终位宽，不做完整测试集评估。
+
+CE-RM 和 Wave-Gauss 的 8-bit 正式 PPQ 分别依赖自己的 gamma 选择，各先排入 `3e-6`、`1e-5`、`3e-5` 三个候选，不直接套用 NS-PwC 的 gamma。六个 gamma 组为 NS-PwC 的 bit2/3/4/8，以及 CE-RM、Wave-Gauss 的 bit8。每组等已登记候选全部完成后，优先选择 `B-0.1 <= avg_weight_bits <= B` 且最接近 B 的候选；未匹配时按 10 倍扩展或几何中点补点。每组最多增加 12 个自适应候选；候选失败、顺序异常或达到上限时写入 `needs_attention`，正式 PPQ 保持等待，不随意填 gamma。
+
+监督程序为 [scripts/poseidon_experiment_queue.py](scripts/poseidon_experiment_queue.py)。已在以下 7 台主机、各 GPU 0 上创建独立 Bash tmux，统一会话名 `poseidon-v2-wait`。**15:43 确认实际进程和 tmux；15:48 再次核验七个心跳均新鲜、状态均为 `waiting_gpu`，冻结源码／配置指纹一致**。等待进程仅使用标准库，不分配 CUDA 内存。
+
+| 主机 | GPU 型号 | GPU UUID | 等待进程 PID |
+| --- | --- | --- | --- |
+| canada | RTX 3090 Ti，24 GB | `GPU-4e8a6d4c-bd03-cd8f-1a3f-d139f9d0c466` | 879539 |
+| ruddy | RTX 3090 Ti，24 GB | `GPU-658c1d8c-2242-e044-a2ef-771b17dbad16` | 1363784 |
+| goosander | RTX 3090 Ti，24 GB | `GPU-b3c57d22-7c43-7552-f9be-d239423a9730` | 1463340 |
+| scaup | RTX 3090 Ti，24 GB | `GPU-81296a4a-c223-af82-4f61-3fa27e662930` | 1400430 |
+| albacore | RTX 4070 Ti SUPER，16 GB | `GPU-fef16809-0629-84cd-b499-be1d7635a42f` | 1543917 |
+| dory | RTX 4070 Ti SUPER，16 GB | `GPU-1b56f0c6-7954-f002-25cc-a299dcd240b9` | 887753 |
+| shark | RTX 4070 Ti SUPER，16 GB | `GPU-d036df2f-28f4-973f-7605-ff61bdc917e1` | 3402318 |
+
+工作方式：每 30 秒检查 GPU，显存已用量低于 1000 MiB 才领取任务；共享任务认领目录防止跨主机重复，GPU 锁保证本队列同卡串行。等待已有 PPQ 子进程退出后才使用相应 GPU。当前优先顺序为 Uniform 8-bit → 已解锁的 PPQ 8-bit → SBPQ 8-bit → 8-bit PPQ 前置扫描 → BRECQ 8-bit → 低位宽 SBPQ → 低位宽 PPQ 扫描；依赖未满足的任务不阻塞其他就绪任务。该等待机制没有向其他用户预留 GPU。
+
+量化实现与优化配置保持不变。队列冻结源码／配置指纹，若后续文件改变则暂停新任务并标记 `source_changed`；共享盘可用空间少于 50 GiB 时等待空间恢复。PPQ 继续清理已完成早期层的可重建 IO 缓存，保留校准、当前层、最近完成层及 checkpoint。失败任务记录错误并保留 checkpoint，队列继续其他任务。历史实测 SBPQ 峰值 reserved 为约 8.9 GB、BRECQ 约 11.7 GB，任务要求显卡总显存至少 14000 MiB。
+
+共享队列的精确路径：
+
+```text
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/queues/sbpq-led-v2-20261119/
+  plan.json             # 全部 81 项初始任务、实际参数、命令模板、源码指纹和依赖
+  states/               # 逐任务排队／运行／完成／失败状态；运行时含主机、GPU、PID
+  claims/               # 跨主机唯一认领记录
+  workers/              # 每张 GPU 的等待进程 PID、设备占用、最近心跳
+  selections/           # 每个数据集／位宽组的候选和选定 gamma
+  additional/           # 按实测位宽自动生成的细扫任务
+  job_records/          # 实际执行的量化／评估命令、PID、源码、日志与耗时阶段
+  worker-<主机别名>.log # 等待进程日志
+```
+
+本地已保存同名目录下的 `plan.json` 和 `verified-startup.json`；本地快照不自动刷新，实时状态读服务器。各实验的模型、量化成本和评估仍按第 2、5.1 节的 v2 标准路径独立保存；评估另附 `.protocol.json` 记录实际协议。尚未启动的任务不会伪造 `compressed_model.pt`、评估 JSON 或完成格。
+
+检查队列（在服务器仓库根目录和 `poseidon-quant` 环境执行）：
+
+```bash
+python scripts/poseidon_experiment_queue.py status \
+  --queue /cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/queues/sbpq-led-v2-20261119
+tmux attach-session -t poseidon-v2-wait
+```
+
+验证记录：本地和服务器的 6 个 CPU 队列检查均通过，覆盖实验矩阵、并发唯一认领、数据集／位宽 gamma 依赖、候选扩展／几何中点、粗扫完成条件及量化后评估串接。全部 81 条量化命令和 63 条评估命令均通过生产入口参数解析与有效设置核验；检查期间未分配 GPU。
 
 ## 6. 历史 default 实验进度（训练 seed42）
 
@@ -398,17 +505,23 @@ NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq
 
 ## 7. 正在运行的任务与检查范围
 
-跨主机进程核查时间：**2026-11-19 11:11:45 Asia/Shanghai**。共尝试 `check_ucl_gpus` 配置的 54 台主机，成功核查 7 台：`albacore`, `canada`, `dory`, `goosander`, `ruddy`, `scaup`, `shark`。这些主机上未发现本人在本项目运行的量化或评估进程。
+最近进程与队列核查：**2026-11-19 15:29–15:48 Asia/Shanghai**，15:43 实查 `albacore`, `canada`, `dory`, `goosander`, `ruddy`, `scaup`, `shark` 七台主机，确认三个既有 PPQ 量化进程和七个新等待进程存活。15:48 再次读取七个新鲜心跳，均为 `waiting_gpu`；69 项 queued、9 项 waiting_gamma、3 项 external_running，冻结源码检查通过，详见第 5.2 节。
 
-其余 47 台因 SSH 连接、超时或 host key 校验问题未完成核查，运行状态为 **❔ 待核实**；不能据此断言所有服务器均无任务。旧核查时共享的三个数据集实验目录未发现新的随机校准运行；本次 v2 设置更新没有重复全主机扫描，启动前需复查。
+本日早前从 15:01 开始执行 `check_ucl_gpus`，共尝试配置的 54 台主机，仅上述 7 台可连接；当时发现 albacore、dory、shark 各一张空闲且通过 CUDA 检查的 GPU，随后启动首批 PPQ sweep。这是早前扫描，不作为其他主机当前可达性或空闲状态的证据。
 
-对最近执行这些实验的服务器还检查了 tmux：
+其余 47 台早前因 SSH 连接、超时或 host key 校验问题未完成核查，本次没有重新连接，保持 **❔ 待核实**。新队列只部署在已核验的七台服务器，不覆盖旧 default 结果。
+
+相关主机的 tmux 与进程：
 
 | 主机 | 已有 tmux 会话 | 当前观察 | 本项目任务状态 |
 | --- | --- | --- | --- |
-| ruddy | 无 | 未发现本人 tmux server | 未发现量化／评估进程 |
-| canada | `quant` | 窗口停在 csh；PPQ layerwise 已导出后返回 shell | 未发现量化／评估进程 |
-| dory | `poseidon-quant-RM`、`poseidon-quant-gauss` | 窗口均停在 csh；已有 CE-RM、Wave-Gauss 结果文件 | 未发现量化／评估进程 |
+| ruddy | `poseidon-v2-wait` | 等待进程存活 | ⏳ 共享队列等待 GPU |
+| canada | `quant`、`poseidon-v2-wait` | 原窗口停在 csh；新等待进程存活 | ⏳ 共享队列等待 GPU |
+| goosander | `poseidon-v2-wait` | 等待进程存活 | ⏳ 共享队列等待 GPU |
+| scaup | `poseidon-v2-wait` | 等待进程存活 | ⏳ 共享队列等待 GPU |
+| dory | 原会话及 `poseidon-nspwc-ppq-bit8-g3e-6`、`poseidon-v2-wait` | PPQ 与等待进程均存活 | 🔵 gamma3e-6 量化中；共享队列等待 |
+| shark | `poseidon-nspwc-ppq-bit8-g3e-5`、`poseidon-v2-wait` | PPQ 与等待进程均存活 | 🔵 gamma3e-5 量化中；共享队列等待 |
+| albacore | 原会话及 `poseidon-nspwc-ppq-bit8-g1e-5`、`poseidon-v2-wait` | gamma1e-5 已自动启动，PPQ 与等待进程均存活 | 🔵 gamma1e-5 量化中；共享队列等待 |
 
 GPU 上有其他进程并不代表本项目在跑；不要将其他用户的 GPU 占用填入本实验的“运行中”状态。
 
@@ -416,7 +529,9 @@ GPU 上有其他进程并不代表本项目在跑；不要将其他用户的 GPU
 
 | 实验键（版本／数据集／位宽／方法／训练 seed／校准组） | 阶段 | 主机 | GPU | tmux | PID | 日志绝对路径 | 最近核查时间 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 当前已核实主机上未发现本项目在跑任务 | — | — | — | — | — | — | 见上方快照时间 |
+| v2 tuning／NS-PwC／8／PPQ layerwise／1／default／gamma3e-6 | 🔵 量化中 | dory | 0 | `poseidon-nspwc-ppq-bit8-g3e-6` | 882559（监督 882521） | `/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma3e-6.log` | 2026-11-19 15:43 |
+| v2 tuning／NS-PwC／8／PPQ layerwise／1／default／gamma1e-5 | 🔵 量化中 | albacore | 0 | `poseidon-nspwc-ppq-bit8-g1e-5` | 1534082（监督 1532884） | `/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma1e-5.log` | 2026-11-19 15:43 |
+| v2 tuning／NS-PwC／8／PPQ layerwise／1／default／gamma3e-5 | 🔵 量化中 | shark | 0 | `poseidon-nspwc-ppq-bit8-g3e-5` | 3398846（监督 3398805） | `/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit8-default-gamma3e-5.log` | 2026-11-19 15:43 |
 
 历史结果可补做 **D02 的独立评估**，无需重新训练该模型；补评估不会使其成为 v2 的完成记录。
 
@@ -566,7 +681,7 @@ PPQ 的 5 epochs 指每个被选中 Linear 都使用全部校准 batch 训练 5 
 
 ### 9.1 v2 模型的独立评估
 
-以下接第 8 节中**已完成量化的那一种方法**，沿用 `POSEIDON_RUN_DIR`、`POSEIDON_RUN_NAME`、`POSEIDON_DATASET` 等变量。评估终点 10 是命令示例；正式比较前需统一各数据集的评估终点、协议与 batch 设置，并记录实际命令。它不是根据量化文件名推断的旧评估范围。
+以下接第 8 节中**已完成量化的那一种方法**，沿用 `POSEIDON_RUN_DIR`、`POSEIDON_RUN_NAME`、`POSEIDON_DATASET` 等变量。第 5.2 节本次队列已明确统一采用以下 `safe-svd`、test、评估终点 10 和 batch 设置，并保存实际命令。该选择不是根据量化文件名推断旧评估范围，也不改变历史评估的真实参数。
 
 ```bash
 POSEIDON_EVAL_FINAL_TIME=10

@@ -1,7 +1,9 @@
 # Poseidon quantization：MySVD 校准协议
 
-SBPQ、BRECQ、PPQ 的参数子目录命名、资源成本与断点恢复，以 [当前说明](../docs/costs_and_resume.md) 为准。
-这三个方法的 save_path 是父目录，完整运行路径由程序生成并打印。
+Poseidon 的 Uniform、SBPQ、BRECQ、PPQ 默认采用实验表格目录名，详见 [当前说明](../docs/costs_and_resume.md)。
+格式为 `quantization_artifacts/<数据集>/<方法>-traj<N>-ft<T>-bit<B>-default/`；
+随机校准时后缀改为 `seed<calibration_seed>`。显式 `save_path` 直接作为最终目录。
+独立评估省略 `output_path` 时自动写入 `quantization_evaluation/<数据集>/<同名实验>.json`。
 
 本分支把 Poseidon 的量化流程统一成三个阶段：加载同一份校准集、执行量化、保存模型。
 评估由 `python -m evaluation.evaluate` 单独执行。默认生产入口不读取旧的 `/lus/...`

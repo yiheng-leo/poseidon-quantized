@@ -13,4 +13,6 @@ SBPQ 当前只支持 global。raw/normalized 等均为参数，不产生额外�
 DynamicQ/StaticQ/RepQ/PTQ4ViT 的 W8A8 模板与 SBPQ 的 A32 设置需要区分。
 原 run*.yaml 和 sweep.yaml 是 finetuning 配置，保持原路径。
 
-SBPQ、BRECQ、PPQ 的 save_path 是父目录，自动追加参数子目录；断点与成本见 [说明](../docs/costs_and_resume.md)。
+Poseidon 的 Uniform、SBPQ、BRECQ、PPQ 省略 save_path 时，自动生成 `<方法>-traj<N>-ft<T>-bit<B>-default`；
+随机校准时后缀为 `seed<calibration_seed>`。显式 save_path 是最终目录；评估省略 output_path 时自动生成同名 JSON。
+VICON 保留原有路径规则；断点与成本见 [说明](../docs/costs_and_resume.md)。

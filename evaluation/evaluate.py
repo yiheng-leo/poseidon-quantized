@@ -125,13 +125,19 @@ def build_parser():
     parser.add_argument("--num_trajectories", "--num-trajectories", dest="num_trajectories", type=int,
                         default=None, help="SAFE-SVD dataset argument (default 64, not a test prefix); "
                         "in endpoint mode, optional held-out trajectory prefix.")
-    parser.add_argument("--output_path", "--output", dest="output_path", default=None)
+    parser.add_argument("--output_path", "--output", dest="output_path", default=None,
+                        help="Exact result JSON path; Poseidon artifacts default to quantization_evaluation/<dataset>/<experiment>.json.")
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.output_path is None:
+        from quantization.paths import default_evaluation_path
+        inferred = default_evaluation_path(args.model_path, args.dataset)
+        if inferred is not None:
+            args.output_path = str(inferred)
     if args.protocol == "safe-svd":
         from evaluation.poseidon.evaluate import run
         result = run(args)

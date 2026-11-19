@@ -130,3 +130,21 @@ quantization_evaluation/
 sbpq_cache/
 sbpq_outputs/
 .pytest_cache/
+
+# Server-local datasets, downloads, models and generated calibration artifacts.
+# No trailing slash: ignore both real directories and machine-specific symlinks.
+/data
+/download
+/downloads
+/dataset
+/datasets
+/model
+/models
+/model-store
+/checkpoints
+/initial_step_sizes
+/precalculated_ranges
+/brecq_artifacts
+/ppq_artifacts
+/quantization_artifacts
+/quantization_evaluation

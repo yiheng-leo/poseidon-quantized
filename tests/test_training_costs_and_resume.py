@@ -34,19 +34,20 @@ def arguments(method, root, extra=()):
                              default_method=method, family='ppq' if method.startswith('ppq') else method)[1]
 
 
-def test_parameter_names_are_stable_complete_and_bounded(tmp_path):
-    from quantization.experiments import effective_settings, config_digest
+def test_compact_paths_keep_exact_config_identity_and_reject_mixed_runs(tmp_path):
+    from quantization.experiments import effective_settings, config_digest, register_experiment
     base = runner.validate_args(arguments('sbpq', tmp_path))
-    assert Path(base.save_path).parent == tmp_path
-    assert 'sbpq_i8_t8_k150' in Path(base.save_path).name
-    assert 'cfg-' in Path(base.save_path).name
-    assert len(Path(base.save_path).name.encode()) < 255
+    assert Path(base.save_path) == tmp_path  # Explicit save_path is the final directory.
     assert runner.validate_args(base).save_path == base.save_path  # Idempotent validation.
+    register_experiment(base)
     for option, value in [('--beta_kappa', '130'), ('--eta', '0.000002'), ('--batch_size', '2'),
                            ('--sobolev_loss_weight', '2'), ('--percentile', '0.0002'),
                            ('--calibration_seed', '8'), ('--total_steps', '4')]:
         changed = runner.validate_args(arguments('sbpq', tmp_path, (option, value)))
-        assert changed.save_path != base.save_path
+        assert changed.save_path == base.save_path
+        assert changed._experiment_id != base._experiment_id
+        with pytest.raises(ValueError, match='hyperparameters changed'):
+            register_experiment(changed)
     same = runner.validate_args(arguments('sbpq', tmp_path, ('--save_every', '2')))
     assert same.save_path == base.save_path  # Operational checkpoint cadence is not a training hyperparameter.
     assert base._experiment_id == config_digest(effective_settings(base))

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from .checkpoints import RESUMABLE, atomic_json, resolve_resume
+from .paths import default_artifact_path, poseidon_run_name, uses_poseidon_paths
 
 # Operational switches may change on resume; the numerical experiment may not.
 _OPERATIONAL = {'config', 'save_path', 'output_root', 'resume', 'overwrite', 'keep_work_dir',
@@ -42,6 +43,8 @@ def token(value):
 
 
 def run_name(args):
+    if uses_poseidon_paths(args):
+        return poseidon_run_name(args)
     common = (f'traj{args.traj_num}_{"rnd" if args.random_calibration == "y" else "fix"}'
               f'_cs{args.calibration_seed}_ft{args.final_time}_tb{args.time_back}'
               f'_bs{args.batch_size}_s{args.seed}')
@@ -65,6 +68,22 @@ def run_name(args):
 
 
 def resolve_output(args):
+    if uses_poseidon_paths(args):
+        if args.resume:
+            directory, _ = resolve_resume(args.resume, args.method)
+            args.save_path = str(directory)
+        else:
+            if not hasattr(args, '_requested_save_path'):
+                args._requested_save_path = args.save_path
+            if args._requested_save_path is not None:
+                args.save_path = str(Path(args._requested_save_path).expanduser())
+            elif args.output_root:
+                args.save_path = str(Path(args.output_root).expanduser() / run_name(args))
+            else:
+                args.save_path = str(default_artifact_path(args))
+        args._experiment_settings = effective_settings(args)
+        args._experiment_id = config_digest(args._experiment_settings)
+        return
     if args.method not in RESUMABLE:
         return
     if args.resume:

@@ -69,8 +69,8 @@ def build_parser(default_method=None, defaults=None, *, family=None):
     parser.add_argument("--model_path", "--ckpt_path", default=os.environ.get("PPQ_MODEL_PATH"))
     parser.add_argument("--data_path", "--data_root", default=os.environ.get(
         "PPQ_DATA_PATH", "poseidon/camlab-ethz/down_streams"))
-    parser.add_argument("--save_path", help="Output parent for SBPQ/PPQ/BRECQ; parameter-named child is automatic.")
-    parser.add_argument("--output_root", help="Alias for the output parent of parameter-named experiments.")
+    parser.add_argument("--save_path", help="Exact output directory for Poseidon Uniform/SBPQ/PPQ/BRECQ; omitted paths use experiment-table labels. Other routes keep their existing conventions.")
+    parser.add_argument("--output_root", help="Optional parent directory for automatically named experiments.")
     parser.add_argument("--batch_size", type=int, default=2,
                         help="Memory batch size; every selected trajectory/time pair is consumed.")
     parser.add_argument("--num_workers", "--dataset_workers", type=int, default=0)

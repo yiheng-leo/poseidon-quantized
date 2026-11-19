@@ -3,33 +3,45 @@
 适用于 ritchie 的正式入口 `SBPQ.sbpq`、`BRECQ.brecq` 和 `PPQ.ppq`（global/layerwise）。
 量化目标、校准轨迹选择和最终独立评估协议保持不变。
 
-## 自动目录命名
+## Poseidon 自动目录命名
 
-这三个入口的 `--save_path` 现在表示**父目录**。例如：
+Poseidon 的 Uniform、SBPQ、BRECQ、PPQ（global/layerwise）不指定 `--save_path` 时，
+按实验表格自动生成目录。例如：
 
 ```bash
 python -u -m BRECQ.brecq --config configs/brecq/default.json \
   --model_path /path/to/checkpoint --data_path /path/to/down_streams \
-  --traj_num 64 --batch_size 2 --seed 42 --DEV cuda \
-  --save_path quantization_artifacts/NS-PwC
+  --traj_num 16 --final_time 10 --weight_bits 8 \
+  --random_calibration n --batch_size 2 --seed 42 --DEV cuda
 ```
 
-输出为下面形式的自动命名子目录，精确路径会在启动时打印：
+精确路径会在启动时打印：
 
 ```text
-quantization_artifacts/NS-PwC/
-  brecq_w8a32_recbs32_iter20000_lr0p001_traj64_fix_cs42_ft20_tb0_bs2_s42_cfg-<20位指纹>/
+quantization_artifacts/NS-PwC/brecq-traj16-ft10-bit8-default/
 ```
 
-SBPQ 名称包括初始/目标 bits、kappa、delta、MC、eta、lr、prior scale、Sobolev、优化步数等；
-PPQ 名称包括初始/目标 bits、epochs、MC、eta、lr 等。所有名称都包括轨迹选择、时间、batch 和 seed。
-名称过长时截短可读部分，配置指纹始终保留。
+通用格式为 `<method>-traj<N>-ft<T>-bit<B>-<calibration>`。
+`random_calibration=n` 对应 `default`；`random_calibration=y` 对应 `seed<calibration_seed>`，
+例如 `--calibration_seed 3` 对应 `seed3`。训练随机种子 `--seed` 不参与目录命名。
+位宽使用配置值：SBPQ/PPQ 为 `target_bits`，Uniform/BRECQ 为 `weight_bits`；
+评估 JSON 内的 `avg_weight_bits` 继续记录实际平均位宽。PPQ layerwise 的 method 为 `ppq-layerwise`。
+三个数据集目录别名为 `NS-PwC`、`CE-RM`、`Wave-Gauss`。
 
-`experiment.json` 保存完整有效 CLI 配置与完整 SHA256。指纹覆盖整个有效配置，包括没有写入可读名称的参数，
+显式 `--save_path` 是最终实验目录，不追加子目录。
+`--output_root` 仍可指定自动命名目录的父目录；同时指定时以 `--save_path` 为准。
+VICON 和其他方法保留原有路径规则。
+
+独立评估不指定 `--output_path` 时，从模型旁的 `experiment.json` 或 `metadata.json`
+读取校准配置，自动保存为 `quantization_evaluation/<数据集>/<同名实验>.json`。
+例如 `quantization_evaluation/NS-PwC/brecq-traj16-ft10-bit8-default.json`。
+这也支持历史长目录和直接传入 `compressed_model.pt`；显式 `--output_path` 优先。
+原始 checkpoint 或没有实验配置的外部模型沿用原有输出行为。
+
+`experiment.json` 保存完整有效 CLI 配置与完整 SHA256。指纹覆盖整个有效配置，包括没有写入目录名称的参数，
 模型/数据路径规范化为绝对路径；JSON 顺序、配置文件位置和输出父目录不影响指纹。
 `save_every`、`profile_interval`、resume、overwrite、keep_work_dir 是操作选项，不改变实验编号，
 每次启动的操作选项会写入成本报告。目录已有不同配置会拒绝混用；已有相同实验须显式 resume 或 overwrite。
-`--output_root` 也可指定父目录。原来的其他方法入口保留旧 save_path 语义。
 
 ## 断点恢复
 

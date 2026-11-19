@@ -90,11 +90,14 @@ python -m SBPQ.vicon.evaluate \
   --model_path /absolute/path/to/actual-parameter-directory \
   --data_path /path/to/converted \
   --config_override datasets.types.NS2D.folder=/path/to/NavierStokes-2D-conditoned \
-  --batch_size 64 --DEV cuda \
+  --protocol research --batch_size 64 --num_workers 0 --DEV cuda \
   --output_path /absolute/path/to/actual-parameter-directory/evaluation.json
 ```
 
 结束时会打印带完整路径、配置与 overrides 的独立评估命令。
+匹配 SAFE-SVD 标准评估时，评估 batch size 固定为 64、worker 数为 0，测试 seed 为配置中的 84，
+完整遍历三个类别的 test 集；不设置 `--max_batches`。
+这是独立评估设置，量化/校准的 batch size 16、32 等不会改变它。
 该命令沿用 SafeSVD evaluator 默认的 research 测试协议，先遍历 loss，再遍历物理指标，
 同一测试集的 RNG 在各次遍历与两种模型间推进；`--protocol paired` 则为各次遍历重放相同测试样本。
 对比 SafeSVD 结果时使用相同评估协议。

@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -258,11 +259,19 @@ def test_local_network_matches_recorded_safesvd_prediction(vicon_case):
             assert metrics[category][name] == pytest.approx(expected, rel=2e-5, abs=2e-6)
 
 
-def test_independent_local_evaluation_and_sampling_protocols(vicon_case, tmp_path):
+def test_independent_local_evaluation_and_sampling_protocols(vicon_case, tmp_path, capsys):
     options, _, _ = vicon_case
     from SBPQ.vicon.evaluation import batch_factory, main
     args = options(tmp_path / "quantized", extra=("--total_steps", "1", "--mc_samples", "1"))
     directory, metadata = run_quantization(args)
+    printed = next(line.split("Evaluate separately with: ", 1)[1]
+                   for line in capsys.readouterr().out.splitlines() if line.startswith("Evaluate separately with: "))
+    command = shlex.split(printed)
+    assert args.batch_size == 2
+    assert command[command.index("--protocol") + 1] == "research"
+    assert command[command.index("--batch_size") + 1] == "64"
+    assert command[command.index("--num_workers") + 1] == "0"
+    assert "--max_batches" not in command
     cfg = load_config(args)
     paired = batch_factory(cfg, batch_size=2, max_batches=1, protocol="paired")
     research = batch_factory(cfg, batch_size=2, max_batches=1, protocol="research")
@@ -286,6 +295,40 @@ def test_independent_local_evaluation_and_sampling_protocols(vicon_case, tmp_pat
         for values in metrics.values():
             assert set(values) == {"origin", "compressed", "change_percent"}
             assert np.isfinite(values["origin"]) and np.isfinite(values["compressed"])
+
+
+def test_complete_research_sequence_matches_safesvd_for_both_models(vicon_case):
+    options, native, reference = vicon_case
+    from SBPQ.vicon.evaluation import batch_factory, evaluate_model
+    from SBPQ.vicon.model_utils import expose_attention
+    with torch.no_grad():
+        for name, parameter in native.named_parameters():
+            values = torch.linspace(-0.1, 0.1, parameter.numel()).reshape_as(parameter)
+            if "norm" in name and name.endswith("weight"):
+                values += 1
+            parameter.copy_(values)
+    compressed = expose_attention(deepcopy(native))
+    with torch.no_grad():
+        for layer in compressed.modules():
+            if isinstance(layer, torch.nn.Linear):
+                layer.weight.copy_(torch.round(layer.weight / .001) * .001)
+    cfg = load_config(options())
+    factory = batch_factory(cfg, batch_size=2, protocol="research")
+    traversals = []
+    def batches():
+        count = 0
+        for category, payload in factory():
+            count += 1
+            yield category, payload
+        traversals.append(count)
+    for model, key in ((native, "research_origin_metrics"), (compressed, "research_compressed_metrics")):
+        actual = evaluate_model(model, batches, cfg, "cpu")
+        for category, metrics in reference[key].items():
+            for name, value in metrics.items():
+                assert actual[category][name] == pytest.approx(value, rel=2e-5, abs=2e-6)
+    # Complete test set: 3 categories x 2 batches, including each partial tail.
+    # Both models share the same advancing streams for all four traversals.
+    assert traversals == [6, 6, 6, 6]
 
 
 def test_public_command_runs_without_any_external_vicon_or_safesvd(vicon_case, tmp_path):

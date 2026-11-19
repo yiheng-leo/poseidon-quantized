@@ -933,5 +933,53 @@
       "base_loss": 0.8558050990104675,
       "rel_base_loss": 0.39551296099963507
     }
+  },
+  "research_origin_metrics": {
+    "COMPRESSIBLE2D": {
+      "sobolev": 266.5452071130276,
+      "rel_sobolev": 1.0014525765055913,
+      "base_loss": 1.1817593574523926,
+      "rel_base_loss": 0.5084537160301752
+    },
+    "EULER2D": {
+      "sobolev": 297.37936758995056,
+      "rel_sobolev": 0.999632539229772,
+      "base_loss": 1.2863848209381104,
+      "rel_base_loss": 0.49542271360050116
+    },
+    "NS2D": {
+      "sobolev": 124683.29057756066,
+      "rel_sobolev": 0.9994048477624102,
+      "continuity": 0.16137269139289856,
+      "rel_continuity": 0.0009874316325255204,
+      "vorticity_err": 119.80183410644531,
+      "rel_vorticity_err": 1.0001999993316881,
+      "base_loss": 0.841946542263031,
+      "rel_base_loss": 0.42358856928022737
+    }
+  },
+  "research_compressed_metrics": {
+    "COMPRESSIBLE2D": {
+      "sobolev": 252.92221134901047,
+      "rel_sobolev": 1.0004404384120953,
+      "base_loss": 0.9668392539024353,
+      "rel_base_loss": 0.5056532236839091
+    },
+    "EULER2D": {
+      "sobolev": 302.94516813755035,
+      "rel_sobolev": 0.999733265748681,
+      "base_loss": 1.2624502182006836,
+      "rel_base_loss": 0.5037990919511967
+    },
+    "NS2D": {
+      "sobolev": 117312.5372672081,
+      "rel_sobolev": 0.9984088043551851,
+      "continuity": 0.00025520846247673035,
+      "rel_continuity": 1.8857337328651643e-06,
+      "vorticity_err": 123.89923858642578,
+      "rel_vorticity_err": 0.9999997877835773,
+      "base_loss": 0.9071195125579834,
+      "rel_base_loss": 0.47966056577010807
+    }
   }
 }

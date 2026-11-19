@@ -376,11 +376,13 @@ def run_quantization(args, *, model=None, calibration_loader=None, calibration_m
     print(f"Recorded optimization time: {metadata['costs_summary']['optimization_seconds']:.3f}s; costs: {destination / 'costs.json'}", flush=True)
     print(f"Saved {destination / 'compressed_model.pt'}", flush=True)
     if args.model_type == 'vicon':
+        # SAFE-SVD evaluates VICON with batch size 64, independently of the
+        # memory batch size used to calibrate/optimize the quantizer.
         command = ['python', '-m', 'SBPQ.vicon.evaluate', '--checkpoint', str(args.model_path),
                    '--data_path', str(args.data_path), '--model_path', str(destination),
                    '--config_dir', args.config_dir, '--config_name', args.config_name,
-                   '--batch_size', str(args.batch_size), '--DEV', args.DEV,
-                   '--num_workers', str(args.num_workers), '--output_path', str(destination / 'evaluation.json')]
+                   '--protocol', 'research', '--batch_size', '64', '--DEV', args.DEV,
+                   '--num_workers', '0', '--output_path', str(destination / 'evaluation.json')]
         for override in args.config_override:
             command += ['--config_override', override]
     else:

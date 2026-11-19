@@ -54,3 +54,6 @@ and deterministic model/evaluation references captured from the original
 SafeSVD code on the synthetic test fixture. Tests check those values, attention
 equivalence, MC gradients, exact restart and a fresh-process public-command run
 that rejects any attempted `VICON` or `safe_svd` import.
+Research-mode references also cover complete test traversals (including partial
+tail batches) for both original and quantized models, sharing advancing streams
+across the four loss/physics passes.

@@ -129,6 +129,7 @@ SBPQ/PPQ 的 B 使用 `target_bits`；Uniform/BRECQ 使用 `weight_bits`。**目
 
 共 **4 位宽 × 4 方法 × 3 组配对 × 3 数据集 = 144 个实验格**。PPQ 全部指 **layerwise、MC=10、init_bits=8、每层 5 epochs**。
 新协议尚未在本文登记启动，先标为未做；历史 default 结果见下一节。启动前复查共享目录及实际进程，再更新状态。
+NS-PwC 的 PPQ 正式运行前，先完成下方 [gamma sweep 待办](#nspwc-ppq-gamma-sweep)，为 2、3、4、8 bits 分别选定 gamma。
 
 | 配置位宽 | 方法 | 训练 seed | 校准组 | NS-PwC | CE-RM | Wave-Gauss |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -180,6 +181,48 @@ SBPQ/PPQ 的 B 使用 `target_bits`；Uniform/BRECQ 使用 `weight_bits`。**目
 | 8 bits | SBPQ | 1 | default（n） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 8 bits | SBPQ | 7 | seed7（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
 | 8 bits | SBPQ | 42 | seed42（y） | ⬜ 未做 | ⬜ 未做 | ⬜ 未做 |
+
+<a id="nspwc-ppq-gamma-sweep"></a>
+
+### 5.1 待做：NS-PwC 的 PPQ layerwise gamma sweep
+
+登记日期：2026-11-19。**状态：⬜ 待做；本次仅登记计划，尚未启动 sweep。** 实验对象为 NS-PwC（`fluids.incompressible.PiecewiseConstants`），目标平均位宽为 2、3、4、8 bits。
+
+依据用户报告的约 3.7 avg bits、gamma 暂按默认 `0.005`，设置以下首轮搜索点。该参照运行的有效配置和最终位宽仍需核对；表中 gamma 是待验证的初始范围，选定 gamma 和实测结果尚未产生。
+
+| 目标平均位宽 B | 首轮 gamma 候选 | 粗扫状态 | 细扫状态 | 选定 gamma | 选定运行的实际 avg bits |
+| --- | --- | --- | --- | --- | --- |
+| 2 bits | `2.5e-2`、`5e-2`、`1e-1` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
+| 3 bits | `7.5e-3`、`1.25e-2`、`2e-2` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
+| 4 bits | `2e-3`、`3e-3`、`5e-3` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
+| 8 bits | `3e-6`、`1e-5`、`3e-5` | ⬜ 待做 | ⬜ 待做 | 待定 | 待记录 |
+
+固定设置：原模型与数据路径沿用第 3 节；训练 `seed=1`、`random_calibration=n`（default；`calibration_seed=42` 仅占位），`traj_num=16`、`final_time=10`、`time_back=0`、`batch_size=2`、`num_workers=0`、`activation_bits=32`；PPQ 使用 `init_bits=8`、`mc_samples=10`、每层 `epochs=5`、`learning_rate=9.1e-4`、`eta=1e-6`、`percentile=1e-4`、`save_every=1000`。同一个 B 内只改变 gamma；`target_bits=B` 作为该组实验的配置标签，不会自动把实际平均位宽拉到 B。
+
+待办顺序与完成标准：
+
+- [ ] 核对 3.7 avg bits 参照运行的真实 gamma、变体、seed、初始化、MC、epochs 及最终状态；只复用有效配置完全一致的已有运行。
+- [ ] 使用训练 seed1＋固定校准 default，完成上表 12 个首轮候选的粗扫；每次记录最终 `avg_weight_bits`、模型目录、gamma、源码提交、运行成本、主机／GPU、PID、日志和状态。
+- [ ] 对每个 B 找到把目标平均位宽夹住的两个正 gamma；通常较小 gamma 对应较高位宽、较大 gamma 对应较低位宽。若未夹住目标，向对应方向扩展范围；若实测顺序反常，先检查优化是否完成及配置是否一致。
+- [ ] 在两点之间用几何中点 `gamma_mid = sqrt(gamma_low * gamma_high)` 细扫，按新的实测平均位宽更新区间。已有候选达到匹配标准时可直接进入选择阶段。
+- [ ] 为 NS-PwC 的每个 B 选定一个 gamma。按“不超过 B bits”的预算比较时，优先匹配 `B - 0.1 <= avg_weight_bits <= B`，并保留实际位宽；未匹配的组继续定位，不能仅按目录中的配置位宽登记达标。
+- [ ] 固定各 B 的选定 gamma，再按第 8 节模板运行三组正式实验：训练／校准配对 **1/default、7/seed7、42/seed42**。三组共享该 B 的 gamma，分别报告实际平均位宽及评估结果；seed 间的位宽变化如实记录。
+- [ ] 将选定 gamma 回填上表及对应正式实验记录；仅在正式模型和评估完成后更新主实验格。gamma sweep 的完成状态与正式实验完成状态分别登记。
+
+不同 gamma 必须使用独立的 tuning 目录，并显式传入 `--save_path`；如做独立评估，还需显式传入 `--output_path`。例如 G 统一使用无空格的科学计数法 `5e-2`，沿用下列目录格式：
+
+```text
+模型目录：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/quantization_artifacts/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit<B>-default-gamma<G>/
+
+评估 JSON（如执行评估）：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/quantization_evaluation/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit<B>-default-gamma<G>.json
+
+日志：
+/cs/research/vecg/EasyPDE/quant/poseidon-quantized/logs/poseidon/NS-PwC/sbpq-led-v2/tuning/ppq-layerwise-traj16-ft10-bit<B>-default-gamma<G>.log
+```
+
+定位 gamma 以模型元数据中的最终参数量加权 `avg_weight_bits` 为依据，不需要对所有候选都做完整测试集评估。若在满足位宽预算的候选间按误差择优，使用校准／验证数据；正式 gamma 确定后再做统一测试评估。正式输出仍使用第 2 节的标准短路径，tuning 产物保留来源记录。
 
 ## 6. 历史 default 实验进度（训练 seed42）
 

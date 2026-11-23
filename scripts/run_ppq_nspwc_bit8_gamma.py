@@ -54,7 +54,8 @@ def prune_completed_caches(run_dir, epochs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gamma", required=True, choices=("3e-6", "1e-5", "3e-5"))
+    parser.add_argument("--gamma", required=True,
+                        choices=("3e-7", "1e-6", "3e-6", "1e-5", "3e-5"))
     parser.add_argument("--gpu_uuid", required=True)
     parser.add_argument("--session", required=True)
     parser.add_argument("--wait_for_idle", action="store_true",

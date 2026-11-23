@@ -242,7 +242,7 @@ SBPQ 使用 `python -m SBPQ.sbpq --config configs/sbpq/default.json`，默认模
 `--config configs/<method>/default.json` 加载配置，显式 CLI 参数覆盖文件。
 公共入口 quantization.quantize、quantization.evaluate 保留转发；旧模型类路径由 compat 映射。
 原 SAPQ/PPQ/BRECQ/DynamicQ/StaticQ 文件移入 `archive/main/`，正式代码不导入这些历史实现。
-本仓库原有 RepQ-ViT、VICON、Aurora、finetuning、绘图和下载材料保留原位置；本次不迁入旧仓库的 shell 调度矩阵。
+Isambard 工作树保留 Poseidon、VICON 和 MPP 的现行入口。旧 Slurm 脚本、独立 RepQ-ViT、Aurora 和旧绘图辅助文件已移至工作树外的归档。Isambard 的启动脚本与配置见仓库根目录的 PoseidonExpSetting.md。
 目录见 [layout](../docs/layout.md)，正式命令见 [仓库说明](../README.md)。
 
 ## 本次目录迁移的边界

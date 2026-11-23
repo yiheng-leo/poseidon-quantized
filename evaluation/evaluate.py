@@ -108,6 +108,8 @@ def build_parser():
     parser.add_argument("--protocol", choices=("safe-svd", "endpoint"), default="safe-svd")
     parser.add_argument("--model_path", "--model", dest="model_path",
                         help="Saved quantization artifact directory or full model file.")
+    parser.add_argument("--models", nargs="+", metavar="PATH",
+                        help="Evaluate multiple Poseidon artifacts with a shared original model.")
     parser.add_argument("--checkpoint", help="Original fine-tuned checkpoint for baseline comparison.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--data_path", "--data-root", dest="data_path", required=True)
@@ -133,6 +135,18 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.models:
+        if args.model_path or args.protocol != "safe-svd":
+            parser.error("--models requires safe-svd and replaces --model_path")
+        from evaluation.poseidon.batch import run_batch
+        from quantization.paths import dataset_label
+
+        output = Path(args.output_path) if args.output_path else (
+            Path("results") / dataset_label(args.dataset) / "result.json"
+        )
+        result = run_batch(args, output)
+        print(json.dumps({"output": str(output), **result}, indent=2))
+        return result
     if args.output_path is None:
         from quantization.paths import default_evaluation_path
         inferred = default_evaluation_path(args.model_path, args.dataset)

@@ -1,5 +1,4 @@
-torch
-torchvision
+# Install the PyTorch family separately from the cu128 index; see ../README.md.
 huggingface-hub
 wandb
 numpy

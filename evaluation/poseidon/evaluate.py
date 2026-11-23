@@ -75,7 +75,7 @@ def rollout(trainer, dataset):
 
 
 def validate_args(args):
-    if not args.model_path and not args.checkpoint:
+    if not args.model_path and not getattr(args, "models", None) and not args.checkpoint:
         raise ValueError("Provide --model_path and/or --checkpoint.")
     if args.eval_obj == "oncomp" and not args.checkpoint:
         raise ValueError("--eval_obj oncomp requires --checkpoint for original predictions.")
@@ -91,42 +91,56 @@ def validate_args(args):
         raise RuntimeError("CUDA was requested but is unavailable; pass --DEV cpu.")
 
 
-def run(args):
-    validate_args(args)
+def open_test_dataset(args):
     from scOT.problems.base import get_dataset
 
     test_ds = build_test_dataset(get_dataset, args)
     if not len(test_ds):
         raise ValueError("Evaluation dataset is empty.")
-    origin_metrics = None
-    if args.checkpoint:
-        from scOT.model import ScOT
+    return test_ds
 
-        model = ScOT.from_pretrained(str(args.checkpoint), local_files_only=True)
-        trainer = build_trainer(model, args)
+
+def evaluate_origin(args, test_ds, *, cached_metrics=None):
+    from scOT.model import ScOT
+
+    model = ScOT.from_pretrained(str(args.checkpoint), local_files_only=True)
+    trainer = build_trainer(model, args)
+    try:
         if args.eval_obj == "oncomp":
             predictions, _, _ = rollout(trainer, test_ds)
             test_ds = FidelityDataset(test_ds, predictions)
-        origin_metrics = evaluate_and_result(
-            trainer, test_ds, args.dataset, rollout, args.physics_batch_size)
-        # Avoid keeping the full original model on GPU during compressed inference.
+        metrics = cached_metrics
+        if metrics is None:
+            metrics = evaluate_and_result(
+                trainer, test_ds, args.dataset, rollout, args.physics_batch_size)
+        return test_ds, metrics
+    finally:
         trainer.model.cpu()
-        del trainer, model
 
-    compressed_metrics = None
-    artifact_metadata = {}
-    if args.model_path:
-        from quantization.artifacts import load_quantized_artifact
 
-        model, artifact_metadata = load_quantized_artifact(args.model_path, "cpu")
-        trainer = build_trainer(model, args)
-        compressed_metrics = evaluate_and_result(
+def evaluate_compressed(args, test_ds, model_path, origin_metrics):
+    from quantization.artifacts import load_quantized_artifact
+
+    model, artifact_metadata = load_quantized_artifact(model_path, "cpu")
+    trainer = build_trainer(model, args)
+    try:
+        metrics = evaluate_and_result(
             trainer, test_ds, args.dataset, rollout, args.physics_batch_size)
+    finally:
+        trainer.model.cpu()
+    return build_results(avg_weight_bits=final_average_weight_bits(artifact_metadata),
+                         origin_metrics=origin_metrics, compressed_metrics=metrics)
 
-    return build_results(
-        avg_weight_bits=final_average_weight_bits(artifact_metadata) if args.model_path else 32.0,
-        origin_metrics=origin_metrics, compressed_metrics=compressed_metrics,
-    )
+
+def run(args):
+    validate_args(args)
+    test_ds = open_test_dataset(args)
+    origin_metrics = None
+    if args.checkpoint:
+        test_ds, origin_metrics = evaluate_origin(args, test_ds)
+    if args.model_path:
+        return evaluate_compressed(args, test_ds, args.model_path, origin_metrics)
+    return build_results(avg_weight_bits=32.0, origin_metrics=origin_metrics)
 
 
 if __name__ == "__main__":

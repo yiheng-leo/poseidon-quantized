@@ -148,3 +148,11 @@ sbpq_outputs/
 /ppq_artifacts
 /quantization_artifacts
 /quantization_evaluation
+/poseidon
+/results
+/outputs
+/rollout_figures
+/ppq_artifact
+
+# Isambard-local MPP checkout. Its own repository manages MPP source and data.
+/multiple_physics_pretraining

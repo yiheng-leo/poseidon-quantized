@@ -122,13 +122,14 @@ def evaluate_compressed(args, test_ds, model_path, origin_metrics):
     from quantization.artifacts import load_quantized_artifact
 
     model, artifact_metadata = load_quantized_artifact(model_path, "cpu")
+    average_bits = final_average_weight_bits(artifact_metadata, model_path=model_path, checkpoint=args.checkpoint)
     trainer = build_trainer(model, args)
     try:
         metrics = evaluate_and_result(
             trainer, test_ds, args.dataset, rollout, args.physics_batch_size)
     finally:
         trainer.model.cpu()
-    return build_results(avg_weight_bits=final_average_weight_bits(artifact_metadata),
+    return build_results(avg_weight_bits=average_bits,
                          origin_metrics=origin_metrics, compressed_metrics=metrics)
 
 

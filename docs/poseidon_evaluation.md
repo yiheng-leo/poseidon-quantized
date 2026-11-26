@@ -99,17 +99,21 @@ change_percent = 100 × (compressed - origin) / origin；正数表示误差增�
 原指标为零时百分比无定义，写为 null。未提供 checkpoint 时每项仅保留 compressed。
 指标真实数值不额外舍入；百分比保留六位小数。
 
-avg_weight_bits 是量化权重的最终参数量加权平均位宽，不把未量化层混入该统计。
-PPQ/SAPQ 读取量化结束时的 avg_weight_bits，固定位宽基线读取 weight_bits；
-不使用目标位宽或初始位宽。产物没有相应统计时为 null；仅评估 FP checkpoint 时为 32。
+`avg_weight_bits` 对每个量化权重通道计算 `log2(R/S)`，再按各通道权重数加权平均。
+PPQ、SBPQ 和 SAPQ 沿用产物中按各自训练范围 `R` 算出的最终平均值。
+BRECQ、Uniform、Dynamic、Static、RepQ 和 PTQ4ViT 从产物的 `quantization_state.pt`
+读取实际步长 `S`，用源 FP 权重的双侧分位距作为 `R`。分位参数取产物配置的
+`percentile`，默认 `1e-4`。RepQ 在其重参数化坐标系中计算分位距。
+源 FP 路径优先取产物记录，SAFE-SVD 也可使用 `--checkpoint`。缺少有效位宽或计算所需
+产物时写为 `null`。FP 模型以及仅量化激活的模型报告权重位宽 `32`。
 不输出 artifact 元数据、模型路径、配置、时间对、样本数、数据指纹、协议说明或大小统计。
-这些变更仅精简报告，不改变评估计算。已有输出文件需用同一命令重跑后更新。
+已有输出文件可用同一命令重跑，更新位宽统计。
 
 ## 来源与验证
 
 `evaluation/poseidon/PDE_calc.py` 原样移植自 SAFE-SVD-v0/evaluation/poseidon/PDE_calc.py。
 physics.py 保留同一公式选择和聚合过程，仅将导入改成本地包形式；reporting.py 负责精简输出。
-ScOT Trainer 使用已加载模型，无需为了评估一个 artifact 再加载完整 FP checkpoint。
+ScOT Trainer 使用已加载模型。固定位宽方法的通道分位距按源 checkpoint 缓存，供同批次的产物复用。
 不影响 base_loss 的通道统计 callback、W&B 上报与外部 Poseidon 路径未引入。
 
 测试包含四类 PDE 与本地 SAFE-SVD 参考代码逐指标直接比较、真实 ScOT 时间索引、

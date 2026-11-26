@@ -51,3 +51,25 @@ def test_batch_reuses_baseline_and_skips_only_matching_artifacts(tmp_path, monke
     assert calls[-2:] == ["origin", first]
     report = json.loads((tmp_path / "results/NS-PwC/result.json").read_text())
     assert set(report["protocols"][result["profile"]]["models"]) == {first, second, third}
+
+
+def test_fixed_grid_artifact_identity_tracks_steps_and_fp_reference(tmp_path):
+    source = tmp_path / "fp.pt"
+    source.write_text("initial source")
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    (artifact / "compressed_model.pt").write_text("weights")
+    state = artifact / "quantization_state.pt"
+    state.write_text("initial state")
+    (artifact / "metadata.json").write_text(json.dumps({
+        "source_model_path": str(source),
+        "quantization": {"method": "brecq", "weight_bits": 3},
+    }))
+    first = batch.artifact_identity(artifact)
+    state.write_text("different state")
+    second = batch.artifact_identity(artifact)
+    assert first["weight_state"] != second["weight_state"]
+    assert first["weight_reference"] == second["weight_reference"]
+    source.write_text("updated source model")
+    third = batch.artifact_identity(artifact)
+    assert second["weight_reference"] != third["weight_reference"]

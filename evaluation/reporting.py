@@ -10,18 +10,21 @@ from typing import Any, Mapping
 _EXCLUDED_METRICS = {"model_size", "linear_size", "rel_base_loss"}
 
 
-def final_average_weight_bits(artifact_metadata: Mapping[str, Any]) -> float | None:
-    """Read achieved bits for quantized weights, never the requested bit budget.
-
-    PPQ/SAPQ save their parameter-weighted final mean in avg_weight_bits.
-    Fixed-bit baselines save weight_bits. Materialized QDQ tensors alone cannot
-    identify the original quantizer, so missing metadata yields null.
-    """
+def final_average_weight_bits(artifact_metadata: Mapping[str, Any], *, model_path=None,
+                              checkpoint=None) -> float | None:
+    """Report the parameter-weighted effective bitwidth of quantized weights."""
     quantization = artifact_metadata.get("quantization", {})
-    for key in ("avg_weight_bits", "effective_bits", "weight_bits"):
+    for key in ("avg_weight_bits", "effective_bits"):
         value = quantization.get(key)
         if isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value):
             return float(value)
+    if quantization.get("method") == "fp" or quantization.get("weight_bits") == 32:
+        return 32.0
+    if model_path is not None:
+        from evaluation.weight_bits import FIXED_GRID_METHODS, average_fixed_grid_bits
+
+        if quantization.get("method") in FIXED_GRID_METHODS:
+            return average_fixed_grid_bits(artifact_metadata, model_path, checkpoint)
     return None
 
 

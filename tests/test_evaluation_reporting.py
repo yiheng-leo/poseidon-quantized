@@ -6,14 +6,50 @@ from evaluation.reporting import build_results, final_average_weight_bits
 
 @pytest.mark.parametrize("quantization,expected", [
     ({"avg_weight_bits": 7.612345, "target_bits": 8, "initial_bits": 9}, 7.612345),
-    ({"weight_bits": 4}, 4),
+    ({"weight_bits": 4}, None),
     ({"effective_bits": 4.2}, 4.2),
     ({"method": "fp", "weight_bits": 32}, 32),
+    ({"method": "static", "weight_bits": 32, "activation_bits": 4}, 32),
     ({"target_bits": 8, "initial_bits": 9}, None),
     ({}, None),
 ])
 def test_final_bits_are_actual_quantization_statistics(quantization, expected):
     assert final_average_weight_bits({"quantization": quantization}) == expected
+
+
+@pytest.mark.parametrize("method", ["brecq", "uniform", "dynamic", "static", "repq", "ptq4vit"])
+def test_fixed_grid_bits_use_saved_scales_and_fp_channel_ranges(method, tmp_path):
+    import torch
+    from torch import nn
+
+    second = nn.Conv2d(1, 1, (1, 4), bias=False) if method == "brecq" else nn.Linear(4, 1, bias=False)
+    fp = nn.Sequential(nn.Linear(2, 1, bias=False), second, nn.Linear(20, 1, bias=False))
+    with torch.no_grad():
+        fp[0].weight.copy_(torch.tensor([[0.0, 8.0]]))
+        second.weight.copy_(torch.tensor([0.0, 0.0, 32.0, 32.0]).reshape_as(second.weight))
+    source = tmp_path / "fp.pt"
+    torch.save(fp, source)
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    if method == "repq":
+        # The original ranges are 4 and 32. The second layer's affine
+        # doubles its weights and range before applying the saved step.
+        state = {
+            "0": {"weight_quantizer": {"scale": torch.tensor([1.0])}, "input_ratio": torch.ones(2)},
+            "1": {"weight_quantizer": {"scale": torch.tensor([8.0])}, "input_ratio": torch.full((4,), 2.0)},
+        }
+    else:
+        key = "scale" if method == "brecq" else "weight_scale"
+        state = {"0": {key: torch.ones_like(fp[0].weight[:, :1])},
+                 "1": {key: torch.tensor(4.0)}}
+    torch.save(state, artifact / "quantization_state.pt")
+    metadata = {"source_model_path": str(source), "settings": {"percentile": 0.25},
+                "quantization": {"method": method, "weight_bits": 3, "quantized_layers": ["0", "1"]}}
+    expected = (2 * 2 + 4 * 3) / 6
+    assert final_average_weight_bits(metadata, model_path=artifact) == pytest.approx(expected)
+    metadata["source_model_path"] = str(tmp_path / "missing.pt")
+    assert final_average_weight_bits(metadata, model_path=artifact) is None
+    assert final_average_weight_bits(metadata, model_path=artifact, checkpoint=source) == pytest.approx(expected)
 
 
 def test_report_keeps_values_and_percent_changes_only():

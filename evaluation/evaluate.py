@@ -172,7 +172,7 @@ def main(argv=None):
     result = evaluate_model(model, loader, dataset=dataset, dataset_name=args.dataset,
                             device=args.DEV, ar_steps=args.ar_steps)
     from evaluation.reporting import build_results, final_average_weight_bits
-    result = build_results(avg_weight_bits=final_average_weight_bits(artifact_meta),
+    result = build_results(avg_weight_bits=final_average_weight_bits(artifact_meta, model_path=args.model_path),
                            compressed_metrics=result["metrics"])
     serialized = json.dumps(result, indent=2, allow_nan=False)
     if args.output_path:

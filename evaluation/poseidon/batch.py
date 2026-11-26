@@ -8,42 +8,31 @@ from pathlib import Path
 
 import torch
 
+from evaluation.weight_bits import (
+    FIXED_GRID_METHODS, checkpoint_identity, file_identity, reference_checkpoint, weight_state_path,
+)
 from quantization.calibration import _fingerprint, dataset_metadata
 from quantization.checkpoints import atomic_json
 from . import evaluate
-
-
-def file_identity(path):
-    info = path.stat()
-    return {
-        "path": str(path.resolve()), "bytes": info.st_size,
-        "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
-    }
 
 
 def artifact_identity(model_path):
     path = Path(model_path).resolve()
     weights = path / "compressed_model.pt" if path.is_dir() else path
     metadata = weights.with_name("metadata.json")
-    return {
+    identity = {
         "weights": file_identity(weights),
         "metadata": file_identity(metadata) if metadata.is_file() else None,
     }
-
-
-def checkpoint_identity(checkpoint):
-    if not checkpoint:
-        return None
-    path = Path(checkpoint).resolve(strict=True)
-    if path.is_file():
-        return [file_identity(path)]
-    files = sorted(p for p in path.iterdir() if p.is_file() and (
-        p.name == "config.json" or p.suffix in {".bin", ".safetensors"}
-        or p.name.endswith(".index.json")
-    ))
-    if not files:
-        raise ValueError(f"No checkpoint files found in {path}")
-    return [file_identity(p) for p in files]
+    if metadata.is_file():
+        record = json.loads(metadata.read_text())
+        quantization = record.get("quantization", {})
+        if quantization.get("method") in FIXED_GRID_METHODS and quantization.get("weight_bits") != 32:
+            state = weight_state_path(weights)
+            identity["weight_state"] = file_identity(state) if state.is_file() else None
+            if identity["weight_state"] is not None:
+                identity["weight_reference"] = checkpoint_identity(reference_checkpoint(record))
+    return identity
 
 
 def evaluation_protocol(args, dataset):
@@ -51,7 +40,7 @@ def evaluation_protocol(args, dataset):
     root = Path(__file__).resolve().parents[2]
     sources = (
         "evaluation/poseidon/evaluate.py", "evaluation/poseidon/physics.py",
-        "evaluation/poseidon/PDE_calc.py", "evaluation/reporting.py",
+        "evaluation/poseidon/PDE_calc.py", "evaluation/reporting.py", "evaluation/weight_bits.py",
         "scOT/model.py", "scOT/trainer.py",
     )
     return {
